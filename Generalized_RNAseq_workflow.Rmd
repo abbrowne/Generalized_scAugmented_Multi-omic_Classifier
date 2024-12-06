@@ -7,7 +7,90 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 
 Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
 
-```{r temp}
+```{r initial setup, echo=TRUE}
+
+# Load the required libraries
+library("stringr")
+library("edgeR")
+
+```
+
+```{r metadata loading, echo=TRUE}
+
+# Load metadata (ask user to provide rowname ID column name if not in the first column)
+temp_metadata <- read.csv("E:/Projects/Example_data/TCGA_PAAD/TCGA.PAAD.sampleMap%2FPAAD_clinicalMatrix", header = TRUE, sep = "\t")
+# Remove erratic characters from rownames
+rownames(temp_metadata) <- unlist(lapply(temp_metadata[,1], function(x) str_replace_all(x, "-","_")))
+# Remove erratic characters from colnames
+
+# Check for NA values
+
+```
+
+```{r RNAseq pre-processing, echo=TRUE}
+
+# Load RNAseq data (ask user to provide rowname ID column name if not in the first column)
+temp_omicdata <- read.csv("E:/Projects/Example_data/TCGA_PAAD/HiSeqV2", header = TRUE, sep = "\t")
+# Check for duplicate gene names before setting to rows
+
+# Assign genes to rownames
+rownames(temp_omicdata) <- temp_omicdata[,1]
+# Drop rowname column after assignment
+temp_omicdata <- temp_omicdata[,-1]
+# Remove erratic characters from colnames
+colnames(temp_omicdata) <- unlist(lapply(colnames(temp_omicdata), function(x) str_replace_all(x, "[.]","_")))
+# Check for NA values
+
+# Check if data is in log scale and convert to counts if it is
+if(max(temp_omicdata) < 1000){
+  temp_omicdata <- (2^temp_omicdata)-1
+}
+
+# Convert to DGE object and filter lowly expressed genes
+isexpr <- rowSums(cpm(temp_omicdata) > 0.1) >= 5
+dge <- DGEList(temp_omicdata[isexpr, ])
+dge <- calcNormFactors(dge)
+
+```
+
+```{r derive Purist subtypes}
+
+
+
+```
+
+```{r differential analysis, echo=TRUE}
+
+# Match the metadata to the omics input
+matched_metadata <- as.data.frame(temp_metadata[colnames(temp_omicdata),])
+
+# Create design matrix
+primary_group <- "sample_type"
+temp_formula <- as.formula(paste("~0 +",primary_group))
+design <- model.matrix(temp_formula, matched_metadata)
+colnames(design) <- gsub(primary_group, "", colnames(design))
+colnames(design) <- gsub(" ", "_", colnames(design))
+
+# Create a contrast matrix
+contr.matrix <- makeContrasts(
+   TumorVSNormal = Primary_Tumor - Solid_Tissue_Normal, 
+   levels = colnames(design))
+
+# Run voom normalization
+dge_voom <- voom(dge, design, plot=TRUE)
+
+# Apply normalized data to linear model with chosen design and contrast matrix
+vfit <- lmFit(dge_voom, design)
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+
+# Compute moderated stats using empirical Bayes moderation of error
+efit <- eBayes(vfit)
+
+# Summarize differential results
+summary(decideTests(efit))
+
+# Store full differential results into a table
+temp_results <- topTable(efit, coef = "TumorVSNormal", number = 100000)
 
 ```
 
