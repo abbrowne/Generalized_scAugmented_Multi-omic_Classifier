@@ -1,0 +1,29 @@
+{"owner":"TCGA",
+ "longTitle":
+ "TCGA pancreatic adenocarcinoma (PAAD) reverse phase protein array",
+ "cohort":"TCGA Pancreatic Cancer (PAAD)",
+ "url":
+ "https://tcga-data.nci.nih.gov/tcgafiles/ftp_auth/distro_ftpusers/anonymous/tumor/paad/cgcc/mdanderson.org/mda_rppa_core/protein_exp/",
+ "dataSubType":"protein expression RPPA",
+ "security":"public",
+ "dataProducer":
+ "MD Anderson Cancer Center TCGA proteome characterization center",
+ "label":"RPPA",
+ "tags":["cancer"],
+ "path":"data/public/TCGA/PAAD/RPPA",
+ "anatomical_origin":["Pancreas"],
+ "colNormalization":true,
+ "name":"TCGA_PAAD_RPPA",
+ "wrangling_procedure":
+ "Level_3 Data (file names: *.protein_expression.*) download from TCGA DCC, and processed at UCSC into Xena repository",
+ "sample_type":["tumor"],
+ "redistribution":true,
+ "domain":"TCGA",
+ "PLATFORM":"M.D. Anderson Reverse Phase Protein Array Core platform",
+ "type":"genomicMatrix",
+ "wrangler":"Xena TCGAscript RPPA processed on 2017-09-08",
+ "version":"2017-09-08",
+ "unit":"normalized RPPA value",
+ "primary_disease":"pancreatic adenocarcinoma",
+ "description":
+ "TCGA pancreatic adenocarcinoma (PAAD) protein expression by reverse phase protein array (RPPA).<br><br> The data was generated and processed at the MD Anderson Cancer Center TCGA proteome characterization center RPPA core. Level 3 interpreted level data was downloaded from TCGA data coordination center.<br><br>Data normalization from the MDACC RPPA core: <a href=\"http://bioinformatics.mdanderson.org/main/TCPA:Overview\" target=\"_blank\"><u>under section How are the RPPA data processed</u></a>.<br>"}

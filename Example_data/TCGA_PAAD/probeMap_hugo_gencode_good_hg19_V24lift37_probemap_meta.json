@@ -1,0 +1,10 @@
+{
+ "type":"probeMap",
+ "version":"2017-07-25",
+ "assembly":"hg19",
+ "url":"http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/wgEncodeGencodeBasicV24lift37.txt.gz",
+ "wrangling_procedure":"convert UCSC GB download to start index 1",
+ "label":"HUGO: human gene symbol (hg19) e.g. TP53",
+ "userLevel":"basic",
+ "idType":"gene"
+}
