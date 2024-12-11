@@ -16,6 +16,13 @@ library(dplyr)
 library(survival)
 library(ggplot2)
 library(survminer)
+library(clusterProfiler)
+library(GSVA)
+library(fgsea)
+library(enrichplot)
+library(qusage)
+library(ggupset)
+library(europepmc)
 
 ```
 
@@ -204,7 +211,7 @@ efit <- eBayes(vfit)
 summary(decideTests(efit))
 
 # Store full differential results into a table
-temp_results <- topTable(efit, coef = "BasalVSClassical", number = 100000)
+temp_dge_results <- topTable(efit, coef = "BasalVSClassical", number = 100000)
 
 ```
 
@@ -243,16 +250,98 @@ ggsurvplot(surv_fit, data = new_metadata, conf.int = TRUE, legend.title = "Puris
 
 ```
 
-```{r comparative covariate analysis, echo=TRUE}
+```{r enrichment analysis, echo=TRUE}
 
-## Create correlation between set of variables
+# Load geneset to test
+temp_genesets <- qusage::read.gmt("E:/Projects/h.all.v2024.1.Hs.symbols.gmt")
+alt_gmt <- clusterProfiler::read.gmt("E:/Projects/h.all.v2024.1.Hs.symbols.gmt")
 
-## Compare variables between selected groups
+# Derive GSVA scores
+temp_logcpm <- data.matrix(log2(temp_cpm + 1))
+temp_gsva_param <- gsvaParam(temp_logcpm, temp_genesets, maxDiff=TRUE)
+temp_gsva <- gsva(temp_gsva_param)
 
+temp_extra <- as.data.frame(t(temp_gsva))
+colnames(temp_extra) <- paste0("GSVA_",colnames(temp_extra))
+temp_metadata <- temp_metadata %>% mutate(Row.names = rownames(.))
+temp_extra <- temp_extra %>% mutate(Row.names = rownames(.))
+temp_metadata <- temp_metadata %>% left_join(temp_extra, by = "Row.names")
+rownames(temp_metadata) <- temp_metadata$Row.names
+temp_metadata <- temp_metadata %>% select(-Row.names)
+
+# Match the metadata to the omics input
+matched_metadata <- as.data.frame(temp_metadata[colnames(temp_gsva),])
+
+primary_group <- "Purist_Subtype"
+temp_formula <- as.formula(paste("~0 +",primary_group))
+design <- model.matrix(temp_formula, matched_metadata)
+colnames(design) <- gsub(primary_group, "", colnames(design))
+
+# Create a contrast matrix
+contr.matrix <- makeContrasts(
+    BasalVSClassical = Basal - Classical, 
+    levels = colnames(design))
+
+## fit the same linear model now to the GSVA enrichment scores
+fit <- lmFit(temp_gsva, design)
+fit <- contrasts.fit(fit, contrasts=contr.matrix)
+
+## estimate moderated t-statistics
+fit <- eBayes(fit)
+
+# Store full differential results into a table
+temp_results <- topTable(fit, coef = "BasalVSClassical", number = 100000)
+
+### Run enrichment using overrepresentation analysis
+temp_up_genes <- rownames(temp_dge_results[temp_dge_results$adj.P.Val < 0.05 & temp_dge_results$logFC > 0,])
+temp_down_genes <- rownames(temp_dge_results[temp_dge_results$adj.P.Val < 0.05 & temp_dge_results$logFC < 0,])
+temp_up_results <- enricher(temp_up_genes, TERM2GENE = alt_gmt)
+temp_down_results <- enricher(temp_down_genes, TERM2GENE = alt_gmt)
+
+barplot(temp_up_results, showCategory=20)
+barplot(temp_down_results, showCategory=20)
+
+# Run enrichment using GSEA
+temp_logfc <- temp_dge_results$logFC
+names(temp_logfc) <- rownames(temp_dge_results)
+temp_logfc <- sort(temp_logfc, decreasing = TRUE)
+temp_gsea_results <- GSEA(temp_logfc, TERM2GENE = alt_gmt)
+
+## Visualization of enrichment results
+
+cnetplot(temp_up_results, categorySize="adj.P.Val", color.params = list(foldChange = temp_logfc))
+cnetplot(temp_down_results, categorySize="adj.P.Val", color.params = list(foldChange = temp_logfc))
+
+cnetplot(temp_gsea_results, categorySize="adj.P.Val", color.params = list(foldChange = temp_logfc))
+
+heatplot(temp_gsea_results, foldChange=temp_logfc, showCategory=20)
+
+temp_plot_input <- pairwise_termsim(temp_gsea_results)
+treeplot(temp_plot_input, cluster.params = list(method = "average"))
+
+upsetplot(temp_gsea_results)
+
+ridgeplot(temp_gsea_results)
+
+# Focus on individual geneset
+gseaplot2(temp_gsea_results, geneSetID = 1, title = temp_gsea_results$Description[1])
+
+gseaplot2(temp_gsea_results, geneSetID = 1:3, pvalue_table = TRUE,
+          color = c("#E495A5", "#86B875", "#7DB0DD"), ES_geom = "dot")
+
+# Check terms by publications
+temp_terms <- unlist(lapply(temp_gsea_results@result$Description[temp_gsea_results@result$p.adjust < 0.05],
+                            function(x){str_replace_all(str_replace(x,"HALLMARK_",""),"_"," ")}))
+pmcplot(temp_terms[1:5], 2016:2024, proportion=FALSE)
 
 ```
 
-```{r enrichment analysis, echo=TRUE}
+```{r comparative covariate analysis, echo=TRUE}
+
+## Create correlation between set of variables
+# Start with correlation between subtypes and select GSVA scores and clinical variables
+
+## Compare variables between selected groups
 
 
 ```
