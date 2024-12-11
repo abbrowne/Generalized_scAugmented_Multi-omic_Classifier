@@ -1,9 +1,0 @@
-{"cohort":"TCGA Pancreatic Cancer (PAAD)",
- ":clinicalFeature":"PAAD_clinicalFeature",
- "url":
- "https://tcga-data.nci.nih.gov/tcgafiles/ftp_auth/distro_ftpusers/anonymous/tumor/paad/bcr/",
- "label":"Phenotypes",
- "version":"2019-12-06",
- "dataSubType":"phenotype",
- "type":"clinicalMatrix",
- "name":"PAAD_clinicalMatrix"}
