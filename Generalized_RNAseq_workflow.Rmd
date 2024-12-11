@@ -444,7 +444,6 @@ gene_data <- gene_data %>%
 write.table(gene_data, "E:/Projects/BioApp_1/Example_data/TCGA_PAAD/Full_ensembl_gene_data.txt", sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(transcript_data, "E:/Projects/BioApp_1/Example_data/TCGA_PAAD/Full_ensembl_transcript_data.txt", sep = "\t", quote = FALSE, row.names = FALSE)
 
-
 ```
 
 ```{r workflow notes}
