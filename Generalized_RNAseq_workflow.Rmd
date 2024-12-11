@@ -10,8 +10,12 @@ Try executing this chunk by clicking the *Run* button within the chunk or by pla
 ```{r initial setup, echo=TRUE}
 
 # Load the required libraries
-library("stringr")
-library("edgeR")
+library(stringr)
+library(edgeR)
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(survminer)
 
 ```
 
@@ -24,6 +28,18 @@ rownames(temp_metadata) <- unlist(lapply(temp_metadata[,1], function(x) str_repl
 # Remove erratic characters from colnames
 
 # Check for NA values
+
+# Add outcomes
+temp_extra <- read.csv("E:/Projects/Example_data/TCGA_PAAD/survival_PAAD_survival.txt", header = TRUE, sep = "\t")
+rownames(temp_extra) <- unlist(lapply(temp_extra[,1], function(x) str_replace_all(x, "-","_")))
+colnames(temp_extra) <- paste0("Outcomes_",colnames(temp_extra))
+
+temp_metadata <- temp_metadata %>% mutate(Row.names = rownames(.))
+temp_extra <- temp_extra %>% mutate(Row.names = rownames(.))
+temp_metadata <- temp_metadata %>% left_join(temp_extra, by = "Row.names")
+rownames(temp_metadata) <- temp_metadata$Row.names
+temp_metadata <- temp_metadata %>% select(-Row.names)
+
 
 ```
 
@@ -55,7 +71,106 @@ dge <- calcNormFactors(dge)
 
 ```{r derive Purist subtypes}
 
+### From https://github.com/naimurashid/PurIST/tree/master
+load("E:/Projects/Example_data/fitteds_public_2019-02-12.Rdata")
+classifier = classifs[[1]]
+temp_classifier <- list()
+temp_classifier[["TSPs"]] <- classifier$TSPs[classifier$fit$beta[-1]!=0,]
+#temp_classifier[["intercept"]] <- classifier$fit$beta[1]
+temp_classifier[["coefs"]] <- classifier$fit$beta[classifier$fit$beta!=0,]
 
+
+purist_ind_fun = function(train_sub, input_classifier){
+  indmat = matrix(-1, ncol(train_sub), nrow(input_classifier$TSPs))
+  for(i in 1:nrow(input_classifier$TSPs)){
+    p1 = which(rownames(train_sub) == input_classifier$TSPs[i,1])
+    p2 = which(rownames(train_sub) == input_classifier$TSPs[i,2])
+    if(length(p1) == 0) stop(sprintf("%s is not found in input matrix rownames",input_classifier$TSPs[i,1]))
+    if(length(p2) == 0) stop(sprintf("%s is not found in input matrix rownames",input_classifier$TSPs[i,2]))
+    indmat[,i] = (train_sub[p1,] > train_sub[p2,])^2
+  }
+  indmat = t(indmat)
+  colnames(indmat) = colnames(train_sub)
+  return(indmat)
+}
+
+apply_purist_classifier = function(temp_data, input_classifier){
+  
+  # create TSP indicator matrix
+  indmat = t(purist_ind_fun(train_sub = temp_data, input_classifier = input_classifier))
+  
+  # name columns
+  colnames(indmat) = paste("indmat", 1:ncol(indmat), sep = "")
+  
+  # add intercept column
+  X=cbind(rep(1, nrow(indmat)), indmat)
+  
+  # make prediction 
+  beta = input_classifier$coefs
+  Pred_prob_basal = exp(X%*%beta)/(1+exp(X%*%beta))
+  
+  # get subtype
+  Subtype = c("Classical","Basal")[(Pred_prob_basal > 0.5)^2 + 1]
+  
+  # get graded subtype
+  Subtype_graded = rep(1, length(Pred_prob_basal))
+  Subtype_graded[Pred_prob_basal < .1] = 1
+  Subtype_graded[Pred_prob_basal > .1 & Pred_prob_basal < .4] = 2
+  Subtype_graded[Pred_prob_basal > .4 & Pred_prob_basal < .5] = 3
+  Subtype_graded[Pred_prob_basal > .5 & Pred_prob_basal < .6] = 4
+  Subtype_graded[Pred_prob_basal > .6 & Pred_prob_basal < .9] = 5
+  Subtype_graded[Pred_prob_basal > .9 ] = 6
+  
+  # graded categories
+  grades = c("strong classical","likely classical","lean classical","lean basal-like","likely basal-like", "strong basal-like")
+  Subtype_graded = grades[Subtype_graded]
+  
+  # final matrix
+  final = data.frame(Pred_prob_basal= Pred_prob_basal, Subtype = Subtype, Subtype_graded = Subtype_graded)
+  rownames(final) = make.names(colnames(temp_data), unique = any(table(colnames(temp_data)) > 1) )
+  
+  return(final)
+}
+
+# Derive TPM
+
+# Import gene lengths to approximate TPM
+temp_gene_data <- read.table("E:/Projects/Example_data/TCGA_PAAD/Full_ensembl_gene_data.txt", header = TRUE, sep = "\t")
+temp_gene_data <- temp_gene_data[order(temp_gene_data$gene_length, decreasing = TRUE),]
+temp_gene_data <- temp_gene_data[!duplicated(temp_gene_data$hgnc_symbol),]
+rownames(temp_gene_data) <- temp_gene_data$hgnc_symbol
+temp_gene_data <- temp_gene_data[rownames(temp_omicdata),]
+temp_gene_data <- temp_gene_data[!is.na(temp_gene_data$gene_length),]
+
+# Calculate CPM (counts per million)
+temp_cpm <- as.data.frame(cpm(temp_omicdata))
+temp_cpm <- temp_cpm[rownames(temp_gene_data),]
+temp_cpm <- temp_cpm[rowSums(is.na(temp_cpm)) == 0,]
+temp_gene_data <- temp_gene_data[rownames(temp_cpm),]
+
+# Example gene lengths (in kilobases)
+gene_lengths <- temp_gene_data$gene_length / 1000
+
+# Convert CPM to TPM
+temp_tpm <- temp_cpm / gene_lengths
+temp_tpm <- t(t(temp_tpm) / colSums(temp_tpm)) * 1e6
+
+### Derive Purist subtypes with CPM and TPM and compare results
+purist_tpm_results <- apply_purist_classifier(temp_tpm, temp_classifier)
+purist_cpm_results <- apply_purist_classifier(temp_cpm, temp_classifier)
+
+## Compare Purist subtypes between CPM and TPM data
+
+## Add subtypes to metadata
+new_metadata <- temp_metadata
+new_metadata <- new_metadata %>% mutate(Row.names = rownames(.))
+new_data <- purist_tpm_results
+colnames(new_data) <- paste0("Purist_",colnames(new_data))
+new_data <- new_data %>% mutate(Row.names = rownames(.))
+new_metadata <- new_metadata %>% left_join(new_data, by = "Row.names")
+rownames(new_metadata) <- new_metadata$Row.names
+new_metadata <- new_metadata %>% select(-Row.names)
+temp_metadata <- new_metadata
 
 ```
 
@@ -65,15 +180,14 @@ dge <- calcNormFactors(dge)
 matched_metadata <- as.data.frame(temp_metadata[colnames(temp_omicdata),])
 
 # Create design matrix
-primary_group <- "sample_type"
+primary_group <- "Purist_Subtype"
 temp_formula <- as.formula(paste("~0 +",primary_group))
 design <- model.matrix(temp_formula, matched_metadata)
 colnames(design) <- gsub(primary_group, "", colnames(design))
-colnames(design) <- gsub(" ", "_", colnames(design))
 
 # Create a contrast matrix
 contr.matrix <- makeContrasts(
-   TumorVSNormal = Primary_Tumor - Solid_Tissue_Normal, 
+   BasalVSClassical = Basal - Classical, 
    levels = colnames(design))
 
 # Run voom normalization
@@ -90,7 +204,98 @@ efit <- eBayes(vfit)
 summary(decideTests(efit))
 
 # Store full differential results into a table
-temp_results <- topTable(efit, coef = "TumorVSNormal", number = 100000)
+temp_results <- topTable(efit, coef = "BasalVSClassical", number = 100000)
+
+```
+
+```{r outcome analysis with event curves, echo=TRUE}
+
+new_metadata <- temp_metadata
+# Identify outcome of interest with associated TTE and event variables
+new_metadata$temp_outcome_status <- new_metadata$Outcomes_OS
+new_metadata$temp_outcome_time <- new_metadata$Outcomes_OS.time
+new_metadata$temp_primary_group <- factor(new_metadata$Purist_Subtype,levels=c("Classical","Basal"))
+
+# Create survival model for continuous variables
+
+
+# Create survival model for factor variables
+# Step 1: Create a Survival Object
+surv_obj <- Surv(time = new_metadata$temp_outcome_time, event = new_metadata$temp_outcome_status)
+
+# Step 2: Fit a Cox Proportional Hazards Model
+cox_model <- coxph(surv_obj ~ temp_primary_group, data = new_metadata)
+
+# Step 3: Display the Summary (Hazard Ratios Included)
+temp_summary <- summary(cox_model)
+
+# Step 4: Create Survival Curves
+# Predict survival based on treatment group
+surv_fit <- survfit(surv_obj ~ temp_primary_group,new_metadata)
+
+# Step 5: Plot Survival Curves
+ggsurvplot(surv_fit, data = new_metadata, conf.int = TRUE, legend.title = "Purist Subtype",
+           legend.labs = c("Classical", "Basal"), xlab = "Time", ylab = "Survival Probability",
+           risk.table = TRUE, xlim=c(0,1000),surv.median.line=c("v"),break.time.by=100) + 
+  ggtitle(paste0("OS in TCGA PAAD by Purist Subtype\nBasal subtype HR = ",round(temp_summary$coefficients[[2]],2)))
+
+
+
+```
+
+```{r comparative covariate analysis, echo=TRUE}
+
+## Create correlation between set of variables
+
+## Compare variables between selected groups
+
+
+```
+
+```{r enrichment analysis, echo=TRUE}
+
+
+```
+
+```{r comparison to outside multi-modal data sets, echo=TRUE}
+
+
+```
+
+
+```{r get all gene IDs and lengths for storage, echo=TRUE}
+
+# Retrieve all human genes with HGNC, Ensembl, and Entrez IDs
+gene_data <- getBM(
+    attributes = c("ensembl_gene_id", "hgnc_symbol", "entrezgene_id"),  # Fields to retrieve
+    mart = ensembl
+)
+
+transcript_data <- getBM(
+    attributes = c("ensembl_gene_id", "ensembl_transcript_id", "transcript_length"),  # Fields to retrieve
+    mart = ensembl
+)
+
+gene_lengths <- transcript_data %>%
+    group_by(ensembl_gene_id) %>%
+    summarize(gene_length = mean(transcript_length, na.rm = TRUE))  # Use mean or sum
+
+gene_data <- gene_data %>%
+    left_join(gene_lengths, by = "ensembl_gene_id")
+
+write.table(gene_data, "E:/Projects/Example_data/TCGA_PAAD/Full_ensembl_gene_data.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(transcript_data, "E:/Projects/Example_data/TCGA_PAAD/Full_ensembl_transcript_data.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+
+
+```
+
+```{r workflow notes}
+
+# 1.differential results within each modality (groups selected by user) DONE
+# 2.comparison to outside multi-modal data sets (most relevant in cancer due to availability)
+# 3.alignment and enrichment across modalities (use EnrichR genesets)
+# 4.outcome analysis (survival or any included outcome of interest) DONE
+# 5.comparative covariate analysis (e.g. correlations and differences between groups)
 
 ```
 
