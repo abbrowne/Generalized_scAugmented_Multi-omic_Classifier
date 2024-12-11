@@ -25,6 +25,7 @@ library(ggupset)
 library(europepmc)
 library(corrplot)
 library(ggpubr)
+library(biomaRt)
 
 ```
 
@@ -42,11 +43,8 @@ rownames(temp_metadata) <- unlist(lapply(temp_metadata[,1], function(x) str_repl
 temp_extra <- read.csv("E:/Projects/BioApp_1/Example_data/TCGA_PAAD/survival_PAAD_survival.txt", header = TRUE, sep = "\t")
 rownames(temp_extra) <- unlist(lapply(temp_extra[,1], function(x) str_replace_all(x, "-","_")))
 colnames(temp_extra) <- paste0("Outcomes_",colnames(temp_extra))
-temp_metadata <- temp_metadata %>% mutate(Row.names = rownames(.))
-temp_extra <- temp_extra %>% mutate(Row.names = rownames(.))
-temp_metadata <- temp_metadata %>% left_join(temp_extra, by = "Row.names")
-rownames(temp_metadata) <- temp_metadata$Row.names
-temp_metadata <- temp_metadata %>% select(-Row.names)
+temp_metadata <- as.data.frame(cbind(temp_metadata,temp_extra[rownames(temp_metadata),]))
+
 
 
 ```
@@ -171,15 +169,9 @@ purist_cpm_results <- apply_purist_classifier(temp_cpm, temp_classifier)
 ## Compare Purist subtypes between CPM and TPM data
 
 ## Add subtypes to metadata
-new_metadata <- temp_metadata
-new_metadata <- new_metadata %>% mutate(Row.names = rownames(.))
 new_data <- purist_tpm_results
 colnames(new_data) <- paste0("Purist_",colnames(new_data))
-new_data <- new_data %>% mutate(Row.names = rownames(.))
-new_metadata <- new_metadata %>% left_join(new_data, by = "Row.names")
-rownames(new_metadata) <- new_metadata$Row.names
-new_metadata <- new_metadata %>% select(-Row.names)
-temp_metadata <- new_metadata
+temp_metadata <- as.data.frame(cbind(temp_metadata,new_data[rownames(temp_metadata),]))
 
 ```
 
@@ -187,6 +179,7 @@ temp_metadata <- new_metadata
 
 # Match the metadata to the omics input
 matched_metadata <- as.data.frame(temp_metadata[colnames(temp_omicdata),])
+matched_metadata$Purist_Subtype <- factor(matched_metadata$Purist_Subtype,levels=c("Classical","Basal"))
 
 # Create design matrix
 primary_group <- "Purist_Subtype"
@@ -253,8 +246,8 @@ ggsurvplot(surv_fit, data = new_metadata, conf.int = TRUE, legend.title = "Puris
 ```{r enrichment analysis, echo=TRUE}
 
 # Load geneset to test
-temp_genesets <- qusage::read.gmt("E:/Projects/h.all.v2024.1.Hs.symbols.gmt")
-alt_gmt <- clusterProfiler::read.gmt("E:/Projects/h.all.v2024.1.Hs.symbols.gmt")
+temp_genesets <- qusage::read.gmt("E:/Projects/BioApp_1/Example_data/h.all.v2024.1.Hs.symbols.gmt")
+alt_gmt <- clusterProfiler::read.gmt("E:/Projects/BioApp_1/Example_data/h.all.v2024.1.Hs.symbols.gmt")
 
 # Derive GSVA scores
 temp_logcpm <- data.matrix(log2(temp_cpm + 1))
@@ -264,11 +257,7 @@ temp_gsva <- gsva(temp_gsva_param)
 # Add GSVA scores to metadata
 temp_extra <- as.data.frame(t(temp_gsva))
 colnames(temp_extra) <- paste0("GSVA_",colnames(temp_extra))
-temp_metadata <- temp_metadata %>% mutate(Row.names = rownames(.))
-temp_extra <- temp_extra %>% mutate(Row.names = rownames(.))
-temp_metadata <- temp_metadata %>% left_join(temp_extra, by = "Row.names")
-rownames(temp_metadata) <- temp_metadata$Row.names
-temp_metadata <- temp_metadata %>% select(-Row.names)
+temp_metadata <- as.data.frame(cbind(temp_metadata,temp_extra[rownames(temp_metadata),]))
 
 # Match the metadata to the omics input
 matched_metadata <- as.data.frame(temp_metadata[colnames(temp_gsva),])
@@ -416,6 +405,297 @@ ggplot(temp_df, aes(x = Purist_Subtype, y = GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL
 ```
 
 ```{r comparison to outside multi-modal data sets, echo=TRUE}
+
+## Compare TCGA PAAD results to TCGA LIHC
+
+# Load metadata (ask user to provide rowname ID column name if not in the first column)
+temp_metadata <- read.csv("E:/Projects/BioApp_1/Example_data/TCGA_LIHC/TCGA.LIHC.sampleMap_LIHC_clinicalMatrix", header = TRUE, sep = "\t")
+# Remove erratic characters from rownames
+rownames(temp_metadata) <- unlist(lapply(temp_metadata[,1], function(x) str_replace_all(x, "-","_")))
+# Remove erratic characters from colnames
+
+# Check for NA values
+
+# Add outcomes to metadata and format them
+temp_extra <- read.csv("E:/Projects/BioApp_1/Example_data/TCGA_LIHC/survival_LIHC_survival.txt", header = TRUE, sep = "\t")
+rownames(temp_extra) <- unlist(lapply(temp_extra[,1], function(x) str_replace_all(x, "-","_")))
+colnames(temp_extra) <- paste0("Outcomes_",colnames(temp_extra))
+temp_metadata <- as.data.frame(cbind(temp_metadata,temp_extra[rownames(temp_metadata),]))
+
+# Load RNAseq data (ask user to provide rowname ID column name if not in the first column)
+temp_omicdata <- read.csv("E:/Projects/BioApp_1/Example_data/TCGA_LIHC/HiSeqV2", header = TRUE, sep = "\t")
+# Check for duplicate gene names before setting to rows
+
+# Assign genes to rownames
+rownames(temp_omicdata) <- temp_omicdata[,1]
+# Drop rowname column after assignment
+temp_omicdata <- temp_omicdata[,-1]
+# Remove erratic characters from colnames
+colnames(temp_omicdata) <- unlist(lapply(colnames(temp_omicdata), function(x) str_replace_all(x, "[.]","_")))
+# Check for NA values
+
+# Check if data is in log scale and convert to counts if it is
+if(max(temp_omicdata) < 1000){
+    temp_omicdata <- (2^temp_omicdata)-1
+}
+
+# Convert to DGE object and filter lowly expressed genes
+isexpr <- rowSums(cpm(temp_omicdata) > 0.1) >= 5
+temp_dge <- DGEList(temp_omicdata[isexpr, ])
+# Calculate normalization factors
+temp_dge <- calcNormFactors(temp_dge)
+
+
+### From https://github.com/naimurashid/PurIST/tree/master
+# Load classifier and format
+load("E:/Projects/BioApp_1/Example_data/fitteds_public_2019-02-12.Rdata")
+classifier = classifs[[1]]
+temp_classifier <- list()
+temp_classifier[["TSPs"]] <- classifier$TSPs[classifier$fit$beta[-1]!=0,]
+temp_classifier[["coefs"]] <- classifier$fit$beta[classifier$fit$beta!=0,]
+
+# Load functions from Purist repo with modification
+purist_ind_fun = function(train_sub, input_classifier){
+    indmat = matrix(-1, ncol(train_sub), nrow(input_classifier$TSPs))
+    for(i in 1:nrow(input_classifier$TSPs)){
+        p1 = which(rownames(train_sub) == input_classifier$TSPs[i,1])
+        p2 = which(rownames(train_sub) == input_classifier$TSPs[i,2])
+        if(length(p1) == 0) stop(sprintf("%s is not found in input matrix rownames",input_classifier$TSPs[i,1]))
+        if(length(p2) == 0) stop(sprintf("%s is not found in input matrix rownames",input_classifier$TSPs[i,2]))
+        indmat[,i] = (train_sub[p1,] > train_sub[p2,])^2
+    }
+    indmat = t(indmat)
+    colnames(indmat) = colnames(train_sub)
+    return(indmat)
+}
+
+apply_purist_classifier = function(temp_data, input_classifier){
+    
+    # create TSP indicator matrix
+    indmat = t(purist_ind_fun(train_sub = temp_data, input_classifier = input_classifier))
+    
+    # name columns
+    colnames(indmat) = paste("indmat", 1:ncol(indmat), sep = "")
+    
+    # add intercept column
+    X=cbind(rep(1, nrow(indmat)), indmat)
+    
+    # make prediction 
+    beta = input_classifier$coefs
+    Pred_prob_basal = exp(X%*%beta)/(1+exp(X%*%beta))
+    
+    # get subtype
+    Subtype = c("Classical","Basal")[(Pred_prob_basal > 0.5)^2 + 1]
+    
+    # get graded subtype
+    Subtype_graded = rep(1, length(Pred_prob_basal))
+    Subtype_graded[Pred_prob_basal < .1] = 1
+    Subtype_graded[Pred_prob_basal > .1 & Pred_prob_basal < .4] = 2
+    Subtype_graded[Pred_prob_basal > .4 & Pred_prob_basal < .5] = 3
+    Subtype_graded[Pred_prob_basal > .5 & Pred_prob_basal < .6] = 4
+    Subtype_graded[Pred_prob_basal > .6 & Pred_prob_basal < .9] = 5
+    Subtype_graded[Pred_prob_basal > .9 ] = 6
+    
+    # graded categories
+    grades = c("strong classical","likely classical","lean classical","lean basal-like","likely basal-like", "strong basal-like")
+    Subtype_graded = grades[Subtype_graded]
+    
+    # final matrix
+    final = data.frame(Pred_prob_basal= Pred_prob_basal, Subtype = Subtype, Subtype_graded = Subtype_graded)
+    rownames(final) = make.names(colnames(temp_data), unique = any(table(colnames(temp_data)) > 1) )
+    
+    return(final)
+}
+
+## Derive TPM
+
+# Import gene lengths to approximate TPM
+temp_gene_data <- read.table("E:/Projects/BioApp_1/Example_data/TCGA_PAAD/Full_ensembl_gene_data.txt", header = TRUE, sep = "\t")
+temp_gene_data <- temp_gene_data[order(temp_gene_data$gene_length, decreasing = TRUE),]
+temp_gene_data <- temp_gene_data[!duplicated(temp_gene_data$hgnc_symbol),]
+rownames(temp_gene_data) <- temp_gene_data$hgnc_symbol
+temp_gene_data <- temp_gene_data[rownames(temp_omicdata),]
+temp_gene_data <- temp_gene_data[!is.na(temp_gene_data$gene_length),]
+
+# Calculate CPM (counts per million)
+temp_cpm <- as.data.frame(cpm(temp_omicdata))
+temp_cpm <- temp_cpm[rownames(temp_gene_data),]
+temp_cpm <- temp_cpm[rowSums(is.na(temp_cpm)) == 0,]
+temp_gene_data <- temp_gene_data[rownames(temp_cpm),]
+
+# Example gene lengths (in kilobases)
+gene_lengths <- temp_gene_data$gene_length / 1000
+
+# Convert CPM to TPM
+temp_tpm <- temp_cpm / gene_lengths
+temp_tpm <- t(t(temp_tpm) / colSums(temp_tpm)) * 1e6
+
+### Derive Purist subtypes with CPM and TPM and compare results
+purist_tpm_results <- apply_purist_classifier(temp_tpm, temp_classifier)
+purist_cpm_results <- apply_purist_classifier(temp_cpm, temp_classifier)
+
+## Compare Purist subtypes between CPM and TPM data
+
+## Add subtypes to metadata
+new_data <- purist_tpm_results
+colnames(new_data) <- paste0("Purist_",colnames(new_data))
+temp_metadata <- as.data.frame(cbind(temp_metadata,new_data[rownames(temp_metadata),]))
+
+# Match the metadata to the omics input
+matched_metadata <- as.data.frame(temp_metadata[colnames(temp_omicdata),])
+matched_metadata$Purist_Subtype <- factor(matched_metadata$Purist_Subtype,levels=c("Classical","Basal"))
+
+# Create design matrix
+primary_group <- "Purist_Subtype"
+temp_formula <- as.formula(paste("~0 +",primary_group))
+design <- model.matrix(temp_formula, matched_metadata)
+colnames(design) <- gsub(primary_group, "", colnames(design))
+
+# Create a contrast matrix
+contr.matrix <- makeContrasts(
+    BasalVSClassical = Basal - Classical, 
+    levels = colnames(design))
+
+# Run voom normalization
+dge_voom <- voom(temp_dge, design, plot=TRUE)
+
+# Apply normalized data to linear model with chosen design and contrast matrix
+vfit <- lmFit(dge_voom, design)
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+
+# Compute moderated stats using empirical Bayes moderation of error
+efit <- eBayes(vfit)
+
+# Summarize differential results
+summary(decideTests(efit))
+
+# Store full differential results into a table
+temp_dge_results <- topTable(efit, coef = "BasalVSClassical", number = 100000)
+
+# Load geneset to test
+temp_genesets <- qusage::read.gmt("E:/Projects/BioApp_1/Example_data/h.all.v2024.1.Hs.symbols.gmt")
+alt_gmt <- clusterProfiler::read.gmt("E:/Projects/BioApp_1/Example_data/h.all.v2024.1.Hs.symbols.gmt")
+
+# Derive GSVA scores
+temp_logcpm <- data.matrix(log2(temp_cpm + 1))
+temp_gsva_param <- gsvaParam(temp_logcpm, temp_genesets, maxDiff=TRUE)
+temp_gsva <- gsva(temp_gsva_param)
+
+# Add GSVA scores to metadata
+temp_extra <- as.data.frame(t(temp_gsva))
+colnames(temp_extra) <- paste0("GSVA_",colnames(temp_extra))
+temp_metadata <- as.data.frame(cbind(temp_metadata,temp_extra[rownames(temp_metadata),]))
+
+# Match the metadata to the omics input
+matched_metadata <- as.data.frame(temp_metadata[colnames(temp_gsva),])
+
+# Create design for comparison of GSVA scores
+primary_group <- "Purist_Subtype"
+temp_formula <- as.formula(paste("~0 +",primary_group))
+design <- model.matrix(temp_formula, matched_metadata)
+colnames(design) <- gsub(primary_group, "", colnames(design))
+
+# Create a contrast matrix
+contr.matrix <- makeContrasts(
+    BasalVSClassical = Basal - Classical, 
+    levels = colnames(design))
+
+## Fit the same linear model now to the GSVA enrichment scores
+fit <- lmFit(temp_gsva, design)
+fit <- contrasts.fit(fit, contrasts=contr.matrix)
+
+## Estimate moderated t-statistics
+fit <- eBayes(fit)
+
+# Store full differential results into a table
+temp_results <- topTable(fit, coef = "BasalVSClassical", number = 100000)
+
+### Run enrichment using overrepresentation analysis
+temp_up_genes <- rownames(temp_dge_results[temp_dge_results$adj.P.Val < 0.05 & temp_dge_results$logFC > 0,])
+temp_down_genes <- rownames(temp_dge_results[temp_dge_results$adj.P.Val < 0.05 & temp_dge_results$logFC < 0,])
+temp_up_results <- enricher(temp_up_genes, TERM2GENE = alt_gmt)
+temp_down_results <- enricher(temp_down_genes, TERM2GENE = alt_gmt)
+
+barplot(temp_up_results, showCategory=20)
+barplot(temp_down_results, showCategory=20)
+
+# Run enrichment using GSEA
+temp_logfc <- temp_dge_results$logFC
+names(temp_logfc) <- rownames(temp_dge_results)
+temp_logfc <- sort(temp_logfc, decreasing = TRUE)
+temp_gsea_results <- GSEA(temp_logfc, TERM2GENE = alt_gmt)
+
+# Create dummy variables for factors
+dummy_vars <- model.matrix(~ Purist_Subtype - 1, data = temp_metadata)
+dummy_vars <- as.data.frame(dummy_vars)
+new_metadata <- cbind(temp_metadata, dummy_vars[rownames(temp_metadata),])
+
+# Decide on variables to include in comparison
+temp_variables <- c("Purist_SubtypeClassical","Purist_SubtypeBasal","GSVA_HALLMARK_HYPOXIA","GSVA_HALLMARK_E2F_TARGETS","GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")
+
+## Create correlation between set of variables
+# Start with correlation between subtypes and select GSVA scores and clinical variables
+temp_cor <- cor(new_metadata[,temp_variables], method="spearman",use = "pairwise.complete.obs")
+corrplot(temp_cor, method = "number", type = "upper", tl.col = "black", tl.srt = 45)
+
+## Compare variables between selected groups
+# For comparison of factors between groups
+# Aggregate on groups of interest
+aggregated_df <- new_metadata %>%
+    group_by(Purist_Subtype, pathologic_T) %>%
+    summarise(Count = n(), .groups = "drop")
+temp_df <- as.data.frame(aggregated_df)
+temp_df <- temp_df[!is.na(temp_df$Purist_Subtype),]
+
+#Derive proportion for each group aggregate
+temp_df_prop <- temp_df %>%
+    group_by(Purist_Subtype) %>%
+    mutate(Proportion = Count / sum(Count))
+
+# Create a contingency table
+contingency_table <- xtabs(Count ~ Purist_Subtype + pathologic_T, data = temp_df)
+
+# Perform Fisher's Exact Test
+fisher_test <- fisher.test(contingency_table)
+
+# Extract the p-value
+temp_pval <- round(fisher_test$p.value,3)
+
+# Create fractional barplot
+ggplot(temp_df_prop, aes(x = Purist_Subtype, y = Proportion, fill = pathologic_T)) +
+    geom_bar(stat = "identity", position = "stack") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = paste0("Pathologic T by Purist Subtype in TCGA PAAD\nFisher's Exact p = ",temp_pval),
+         x = "Purist_Subtype",
+         y = "Proportion",
+         fill = "pathologic_T") +
+    theme_minimal()
+
+# For comparison of continuous values between groups
+temp_df <- temp_metadata[!is.na(temp_metadata$Purist_Subtype),]
+
+# Calculate median values for including in each plot
+medians <- temp_df %>%
+    group_by(Purist_Subtype) %>%
+    summarize(
+        Median = round(median(GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION, na.rm = TRUE), 3)
+    )
+
+# Plot the comparison between groups with medians
+ggplot(temp_df, aes(x = Purist_Subtype, y = GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION)) +
+    stat_summary(fun = mean, geom = "point", size = 3, color = "red") +  # Mean
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +  # Error bars
+    geom_boxplot(fill = c("lightblue", "lightpink")) +
+    stat_compare_means(method = "t.test") +
+    geom_text(data = medians, aes(x = Purist_Subtype, y = Median + 0.05 * diff(range(temp_df$GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION)), 
+                                  label = Median),
+              vjust = 0, size = 4, inherit.aes = FALSE) +  
+    labs(title = "Comparison of Value Between Groups with Mean and SE",
+         x = "Purist_Subtype",
+         y = "GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION") +
+    theme_minimal()
+
+
 
 
 ```
