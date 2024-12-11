@@ -23,6 +23,8 @@ library(enrichplot)
 library(qusage)
 library(ggupset)
 library(europepmc)
+library(corrplot)
+library(ggpubr)
 
 ```
 
@@ -338,10 +340,72 @@ pmcplot(temp_terms[1:5], 2016:2024, proportion=FALSE)
 
 ```{r comparative covariate analysis, echo=TRUE}
 
+##Subset to tumor or specified samples before starting
+
+#
+dummy_vars <- model.matrix(~ Purist_Subtype - 1, data = temp_metadata)
+dummy_vars <- as.data.frame(dummy_vars)
+new_metadata <- cbind(temp_metadata, dummy_vars[rownames(temp_metadata),])
+temp_variables <- c("Purist_SubtypeClassical","Purist_SubtypeBasal","GSVA_HALLMARK_HYPOXIA","GSVA_HALLMARK_E2F_TARGETS","GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")
+
 ## Create correlation between set of variables
 # Start with correlation between subtypes and select GSVA scores and clinical variables
+temp_cor <- cor(new_metadata[,temp_variables], method="spearman",use = "pairwise.complete.obs")
+corrplot(temp_cor, method = "number", type = "upper", tl.col = "black", tl.srt = 45)
 
 ## Compare variables between selected groups
+# For comparison of factors between groups
+aggregated_df <- new_metadata %>%
+    group_by(Purist_Subtype, pathologic_T) %>%
+    summarise(Count = n(), .groups = "drop")
+temp_df <- as.data.frame(aggregated_df)
+temp_df <- temp_df[!is.na(temp_df$Purist_Subtype),]
+
+temp_df_prop <- temp_df %>%
+  group_by(Purist_Subtype) %>%
+  mutate(Proportion = Count / sum(Count))
+
+# Create a contingency table
+contingency_table <- xtabs(Count ~ Purist_Subtype + pathologic_T, data = temp_df)
+
+# Perform Fisher's Exact Test
+fisher_test <- fisher.test(contingency_table)
+
+# Extract the p-value
+temp_pval <- round(fisher_test$p.value,3)
+
+# Create fractional barplot
+ggplot(temp_df_prop, aes(x = Purist_Subtype, y = Proportion, fill = pathologic_T)) +
+    geom_bar(stat = "identity", position = "stack") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = paste0("Pathologic T by Purist Subtype in TCGA PAAD\nFisher's Exact p = ",temp_pval),
+         x = "Purist_Subtype",
+         y = "Proportion",
+         fill = "pathologic_T") +
+    theme_minimal()
+
+# For comparison of continuous values between groups
+temp_df <- temp_metadata[!is.na(temp_metadata$Purist_Subtype),]
+
+# Calculate median values for including in each plot
+medians <- temp_df %>%
+    group_by(Purist_Subtype) %>%
+    summarize(
+        Median = round(median(GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION, na.rm = TRUE), 3)
+    )
+
+ggplot(temp_df, aes(x = Purist_Subtype, y = GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION)) +
+    stat_summary(fun = mean, geom = "point", size = 3, color = "red") +  # Mean
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +  # Error bars
+    geom_boxplot(fill = c("lightblue", "lightpink")) +
+    stat_compare_means(method = "t.test") +
+    geom_text(data = medians, aes(x = Purist_Subtype, y = Median + 0.05 * diff(range(temp_df$GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION)), 
+                                  label = Median),
+              vjust = 0, size = 4, inherit.aes = FALSE) +  
+    labs(title = "Comparison of Value Between Groups with Mean and SE",
+         x = "Purist_Subtype",
+         y = "GSVA_HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION") +
+    theme_minimal()
 
 
 ```
