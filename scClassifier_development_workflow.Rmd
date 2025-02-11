@@ -1,0 +1,130 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r environment setup}
+
+library(dplyr)
+library(TCGAbiolinks)
+library(DT)
+library(purrr)
+library(recount3)
+
+```
+
+```{r get all TCGA PAAD expression}
+
+human_projects <- available_projects()
+
+tcga_paad_info = subset(
+    human_projects,
+    project == "PAAD" & file_source == "tcga" & project_type == "data_sources"
+)
+
+proj_info <- map(seq(nrow(tcga_paad_info)), ~tcga_paad_info[.x, ])
+
+## create the RangedSummarizedExperiment. the create_rse function works on 
+## one row a time 
+
+rse_tcga_paad <- map(proj_info, ~create_rse(.x))
+
+#### Creating TPM
+count2tpm<- function(rse){
+    count_matrix <- rse@assays@data$raw_counts
+    gene_length <- rse@rowRanges$bp_length
+    reads_per_rpk <- count_matrix/gene_length
+    per_mil_scale <- colSums(reads_per_rpk)/1000000
+    tpm_matrix <- t(t(reads_per_rpk)/per_mil_scale)
+    return(tpm_matrix)
+}
+
+getCountMatrix<- function(rse){
+    count_matrix <- rse@assays@data$raw_counts
+    return(count_matrix)
+}
+
+## convert raw count matrix per cancer type to TPM and subset to only the genes of interest 
+tpm_data<- map(rse_tcga_paad, count2tpm)
+count_data <- map(rse_tcga_paad, getCountMatrix)
+
+## get the metadata column 
+metadata<- map(rse_tcga_paad, ~.x@colData@listData %>% as.data.frame())
+
+# bind the data matrix across cancer types together 
+tpm_data2<- reduce(tpm_data, cbind)
+count_data2 <- reduce(count_data,cbind)
+
+## bind the metadata across cancer types together
+metadata2<- reduce(metadata, rbind)
+
+rownames(metadata2) <- metadata2$tcga.gdc_cases.samples.submitter_id
+colnames(count_data2) <- rownames(metadata2)
+colnames(tpm_data2) <- rownames(metadata2)
+
+dim(tpm_data2)
+dim(count_data2)
+dim(metadata2)
+
+tpm_data2[1:5,1:5]
+count_data2[1:5,1:5]
+metadata2[1:5,1:5]
+
+saveRDS(tpm_data2,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_TPM_data.RDS")
+saveRDS(count_data2,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_count_data.RDS")
+saveRDS(metadata2,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_meta_data.RDS")
+
+```
+
+```{r load data}
+
+#input_counts <- read.table("E:/Projects/Example_data/TCGA_PAAD/HiSeqV2",sep="\t",header=TRUE,row.names=1)
+
+#input_clin <- read.table("E:/Projects/Example_data/TCGA_PAAD/TCGA.PAAD.sampleMap%2FPAAD_clinicalMatrix",sep="\t",header=TRUE,row.names=1)
+
+input_surv <- read.table("E:/Projects/Example_data/TCGA_PAAD/survival_PAAD_survival.txt",sep="\t",header=TRUE,row.names=1)
+rownames(input_surv) <- paste0(rownames(input_surv),"A")
+
+```
+
+```{r derive scores}
+
+
+
+```
+
+```{r run survival cut tree analysis}
+
+
+
+```
+
+```{r derive classifier for survival variables}
+
+
+
+```
+
+```{r determine classifier celltype drivers with scGPT reference}
+
+
+
+```
+
+```{r refine classifier using celltype knowledge}
+
+
+
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
