@@ -260,7 +260,9 @@ colnames(temp_extra) <- paste0("GSVA_",colnames(temp_extra))
 temp_metadata <- as.data.frame(cbind(temp_metadata,temp_extra[rownames(temp_metadata),]))
 
 # Match the metadata to the omics input
-matched_metadata <- as.data.frame(temp_metadata[colnames(temp_gsva),])
+matched_metadata <- as.data.frame(temp_metadata[colnames(temp_omicdata),])
+write.csv(temp_omicdata, "E:/Projects/BioApp_1/Example_data/test_counts.csv")
+write.csv(matched_metadata, "E:/Projects/BioApp_1/Example_data/test_meta.csv")
 
 # Create design for comparison of GSVA scores
 primary_group <- "Purist_Subtype"
@@ -733,6 +735,19 @@ write.table(transcript_data, "E:/Projects/BioApp_1/Example_data/TCGA_PAAD/Full_e
 # 3.alignment and enrichment across modalities (use EnrichR genesets) DONE
 # 4.outcome analysis (survival or any included outcome of interest) DONE
 # 5.comparative covariate analysis (e.g. correlations and differences between groups) DONE
+
+```
+
+```{r automated workflow}
+
+### This chunk is designed to simulate the workflow for a user logging into VECTOR and running the workflow with their own data
+
+## User logs in to home screen where they can view a list of projects or create new projects
+
+## Creating a project brings the user into the tool itself with a clean dashboard to begin analysis (or just a new prompt window if that is the route we take)
+
+## 
+
 
 ```
 
