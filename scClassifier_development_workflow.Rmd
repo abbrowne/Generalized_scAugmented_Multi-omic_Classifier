@@ -17,6 +17,10 @@ library(recount3)
 library(DESeq2)
 library(edgeR)
 library(limma)
+library(GSVA)
+library(qusage)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
 
 ```
 
@@ -117,6 +121,36 @@ keep <- rowSums(input_counts > 0) > 0
 input_counts <- input_counts[keep,]
 input_tpm <- input_tpm[keep,]
 
+##Get HGNC symbols for remaining genes and replace ENSEMBL rownames
+gene_ids <- rownames(input_counts)
+
+# Remove version suffix if present
+gene_ids_clean <- sub("\\..*", "", gene_ids)
+
+# Connect to the Ensembl database
+# You can specify an Ensembl release if needed, e.g., useEnsembl(biomart="ensembl", 
+# version=109, dataset="hsapiens_gene_ensembl")
+symbol_map <- mapIds(
+    x         = org.Hs.eg.db,
+    keys      = gene_ids_clean,
+    column    = "SYMBOL",     # We want HGNC gene symbols
+    keytype   = "ENSEMBL",    # Our keys are Ensembl gene IDs
+    multiVals = "first"       # If multiple symbols map to one ID, take the first
+)
+
+temp_rownames <- ifelse(
+    is.na(symbol_map[gene_ids_clean]),
+    gene_ids_clean,
+    symbol_map[gene_ids_clean]
+)
+rownames(input_counts) <- ifelse(
+    duplicated(temp_rownames),
+    gene_ids_clean,
+    temp_rownames
+)
+
+rownames(input_tpm) <- rownames(input_counts)
+
 ##Derive CPM
 lib_sizes <- colSums(input_counts)
 input_cpm <- t(t(input_counts) / lib_sizes * 1e6)
@@ -136,7 +170,7 @@ input_vst <- assay(vsd)
 
 saveRDS(input_vst,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_DESeq2_normalized_vst.RDS")
 
-input_expression_set <- list(log2CPM=log2(input_cpm+1),TPM=log2(input_tpm+1),TMM=log2(input_cpmtmm+1),VST=input_vst)
+input_expression_set <- list(log2CPM=log2(input_cpm+1),log2TPM=log2(input_tpm+1),log2TMM=log2(input_cpmtmm+1),VST=input_vst)
 
 
 
@@ -144,6 +178,15 @@ input_expression_set <- list(log2CPM=log2(input_cpm+1),TPM=log2(input_tpm+1),TMM
 
 ```{r derive scores}
 
+hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
+#c1_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/c1.all.v2024.1.Hs.symbols.gmt")
+
+input_gsva_set <- list()
+
+for(temp_input_i in 1:length(input_expression_set)){
+  temp_name <- names(input_expression_set)[[temp_input_i]]
+  input_gsva_set[[temp_name]] <- gsva(gsvaParam(input_expression_set[[temp_name]],hp_gmt))
+}
 
 
 ```
