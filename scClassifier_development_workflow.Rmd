@@ -21,6 +21,8 @@ library(GSVA)
 library(qusage)
 library(org.Hs.eg.db)
 library(AnnotationDbi)
+library(survival)
+library(rpart)
 
 ```
 
@@ -187,13 +189,25 @@ for(temp_input_i in 1:length(input_expression_set)){
   temp_name <- names(input_expression_set)[[temp_input_i]]
   input_gsva_set[[temp_name]] <- gsva(gsvaParam(input_expression_set[[temp_name]],hp_gmt))
 }
+temp_gsva <- t(input_gsva_set$log2CPM)[rownames(input_meta),]
+colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+input_meta <- cbind(input_meta,temp_gsva)
 
 
 ```
 
 ```{r run survival cut tree analysis}
 
+temp_meta <- input_meta
+##Modified one entry with 0 for survival time that was causing an error
+temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
 
+temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
+
+fit <- rpart(temp_formula, data = temp_meta, method = "exp")
+plot(fit,  uniform=TRUE,  main="Survival Tree")
+
+text(fit, use.n=TRUE, all=TRUE, cex=.8)
 
 ```
 
