@@ -14,6 +14,9 @@ library(TCGAbiolinks)
 library(DT)
 library(purrr)
 library(recount3)
+library(DESeq2)
+library(edgeR)
+library(limma)
 
 ```
 
@@ -56,11 +59,11 @@ count_data <- map(rse_tcga_paad, getCountMatrix)
 metadata<- map(rse_tcga_paad, ~.x@colData@listData %>% as.data.frame())
 
 # bind the data matrix across cancer types together 
-tpm_data2<- reduce(tpm_data, cbind)
-count_data2 <- reduce(count_data,cbind)
+tpm_data2<- purrr::reduce(tpm_data, cbind)
+count_data2 <- purrr::reduce(count_data,cbind)
 
 ## bind the metadata across cancer types together
-metadata2<- reduce(metadata, rbind)
+metadata2<- purrr::reduce(metadata, rbind)
 
 rownames(metadata2) <- metadata2$tcga.gdc_cases.samples.submitter_id
 colnames(count_data2) <- rownames(metadata2)
@@ -82,12 +85,60 @@ saveRDS(metadata2,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_meta_data.R
 
 ```{r load data}
 
-#input_counts <- read.table("E:/Projects/Example_data/TCGA_PAAD/HiSeqV2",sep="\t",header=TRUE,row.names=1)
-
-#input_clin <- read.table("E:/Projects/Example_data/TCGA_PAAD/TCGA.PAAD.sampleMap%2FPAAD_clinicalMatrix",sep="\t",header=TRUE,row.names=1)
-
+input_counts <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_count_data.RDS")
+input_counts <- input_counts[,order(colnames(input_counts))]
+input_tpm <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_TPM_data.RDS")
+input_tpm <- input_tpm[,order(colnames(input_tpm))]
+input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_meta_data.RDS")
+input_meta <- input_meta[order(rownames(input_meta)),]
 input_surv <- read.table("E:/Projects/Example_data/TCGA_PAAD/survival_PAAD_survival.txt",sep="\t",header=TRUE,row.names=1)
 rownames(input_surv) <- paste0(rownames(input_surv),"A")
+colnames(input_surv) <- paste0("Survival_",colnames(input_surv))
+sum(rownames(input_surv) %in% rownames(input_meta))
+sum(colnames(input_surv) %in% colnames(input_meta))
+
+input_meta <- cbind(input_meta,input_surv[rownames(input_meta),])
+##Replace . with _ for column names
+names(input_meta) <- gsub("\\.", "_", names(input_meta))
+input_meta$sample_type <- input_meta$tcga_cgc_sample_sample_type
+input_meta$sample_type[input_meta$sample_type == "Primary Tumor"] <- "Tumor"
+input_meta$sample_type[input_meta$sample_type == "Metastatic"] <- "Met"
+input_meta$sample_type[input_meta$sample_type == "Solid Tissue Normal"] <- "Normal"
+input_meta$sample_type <- factor(input_meta$sample_type,levels=c("Normal","Tumor","Met"))
+
+##Derive other normalized expression matrices
+
+### Check that sample names match in both files
+all(colnames(input_counts) %in% rownames(input_meta))
+all(colnames(input_counts) == rownames(input_meta))
+
+##Filter non-expressed genes
+keep <- rowSums(input_counts > 0) > 0
+input_counts <- input_counts[keep,]
+input_tpm <- input_tpm[keep,]
+
+##Derive CPM
+lib_sizes <- colSums(input_counts)
+input_cpm <- t(t(input_counts) / lib_sizes * 1e6)
+saveRDS(input_cpm,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_CPM.RDS")
+
+##Perform edgeR TMM normalization
+dge <- DGEList(counts = input_counts, group = input_meta$sample_type)
+dge <- calcNormFactors(dge, method = "TMM")
+input_cpmtmm <- cpm(dge, normalized.lib.sizes = TRUE)
+saveRDS(input_cpmtmm,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_TMM_normalized_cpm.RDS")
+
+##Perform DESeq2 normalization
+dds <- DESeqDataSetFromMatrix(countData = input_counts, colData = input_meta, design = ~ sample_type)
+
+vsd <- vst(dds, blind = FALSE)
+input_vst <- assay(vsd)
+
+saveRDS(input_vst,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_DESeq2_normalized_vst.RDS")
+
+input_expression_set <- list(log2CPM=log2(input_cpm+1),TPM=log2(input_tpm+1),TMM=log2(input_cpmtmm+1),VST=input_vst)
+
+
 
 ```
 
