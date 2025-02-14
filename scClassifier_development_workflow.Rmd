@@ -260,10 +260,27 @@ DotPlot(
     group.by  = "Cell_type"
 ) + RotatedAxis()
 
+RidgePlot(seurat_obj, features = "MyGeneSet1", group.by = "Cell_type")
+
+##Extract ductal cell type 2 and macrophage markers for classifier derivation
+test_markers <- FindMarkers(
+    object        = input_scData,
+    ident.1       = "Ductal cell type 2",       # cell type or cluster name
+    only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
+    logfc.threshold = 0.25,          # filter out genes with low logFC
+    min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
+)
+
 
 ```
 
 ```{r derive classifier for survival variables}
+
+##Define group based on survival tree cutpoints
+
+##Use subset of genes from scRNAseq to identify classifier
+
+##Compare classifier to existing Purist classifier
 
 
 
