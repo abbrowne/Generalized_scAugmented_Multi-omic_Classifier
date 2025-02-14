@@ -278,26 +278,13 @@ test_markers <- FindMarkers(
 
 ##Define group based on survival tree cutpoints
 
-##Use subset of genes from scRNAseq to identify classifier
+##Use subset of genes from scRNAseq to identify classifier using switchBox and ncvreg packages
 
 ##Compare classifier to existing Purist classifier
 
 
 
 ```
-
-```{r determine classifier celltype drivers with scGPT reference}
-
-
-
-```
-
-```{r refine classifier using celltype knowledge}
-
-
-
-```
-
 
 
 Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
