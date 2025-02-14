@@ -23,6 +23,7 @@ library(org.Hs.eg.db)
 library(AnnotationDbi)
 library(survival)
 library(rpart)
+library(pdacR)
 
 ```
 
@@ -180,14 +181,24 @@ saveRDS(input_expression_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_
 
 ```{r derive scores}
 
+input_expression_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
+
 hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
+pdac_genesets <- pdacR::gene_lists
+pdac_genesets$Moffitt.Tumor <- NULL
+pdac_genesets$Puleo.Centroids <- NULL
+pdac_genesets$ICGC.SAM <- NULL
+pdac_genesets$Moffitt.Top5s <- NULL
+pdac_genesets$Moffitt.Top25s <- NULL
+all_gmts <- c(hp_gmt,pdac_genesets)
+
 #c1_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/c1.all.v2024.1.Hs.symbols.gmt")
 
 input_gsva_set <- list(GSVA=list())#,ssGSEA=list())
 
 for(temp_input_i in 1:length(input_expression_set)){
   temp_name <- names(input_expression_set)[[temp_input_i]]
-  input_gsva_set$GSVA[[temp_name]] <- gsva(gsvaParam(input_expression_set[[temp_name]],hp_gmt))
+  input_gsva_set$GSVA[[temp_name]] <- gsva(gsvaParam(input_expression_set[[temp_name]],all_gmts))
   #input_gsva_set$ssGSEA[[temp_name]] <- gsva(ssgseaParam(input_expression_set[[temp_name]],hp_gmt,normalize = FALSE))
 }
 saveRDS(input_gsva_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
@@ -207,10 +218,48 @@ temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
 
 temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
 
-fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(minbucket = 18,maxdepth=4))
+fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(cp=0.02,maxdepth=4,
+                                                                                     minsplit = round(nrow(input_meta)/5),
+                                                                                     minbucket = round(nrow(input_meta)/10)))
 plot(fit,  uniform=TRUE,  main="Survival Tree")
 
 text(fit, use.n=TRUE, all=TRUE, cex=.8)
+
+```
+
+```{r determine best signature celltype drivers with scRNAseq reference}
+
+input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
+
+my_gene_set <- all_gmts$CIBERSORT.Neutrophils
+
+gene_set_list <- list(my_gene_set)
+
+# Add module score to Seurat object
+seurat_obj <- AddModuleScore(
+    object   = input_scData,
+    features = gene_set_list,
+    name     = "MyGeneSet"
+)
+
+FeaturePlot(
+    object   = seurat_obj, 
+    features = "MyGeneSet1", 
+    pt.size  = 0.5
+)
+
+VlnPlot(
+    object   = seurat_obj, 
+    features = "MyGeneSet1", 
+    group.by = "Cell_type"  # or your cell type annotation column
+)
+
+DotPlot(
+    seurat_obj, 
+    features  = my_gene_set, 
+    group.by  = "Cell_type"
+) + RotatedAxis()
+
 
 ```
 
