@@ -24,6 +24,10 @@ library(AnnotationDbi)
 library(survival)
 library(rpart)
 library(pdacR)
+library(Seurat)
+library(ggplot2)
+library(switchBox)
+library(ncvreg)
 
 ```
 
@@ -175,6 +179,7 @@ saveRDS(input_vst,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_DESeq2_norm
 
 input_expression_set <- list(log2CPM=log2(input_cpm+1),log2TPM=log2(input_tpm+1),log2TMM=log2(input_cpmtmm+1),VST=input_vst)
 saveRDS(input_expression_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
+saveRDS(input_meta,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
 
 
 ```
@@ -203,24 +208,28 @@ for(temp_input_i in 1:length(input_expression_set)){
 }
 saveRDS(input_gsva_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
 
-temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
-colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
-input_meta <- cbind(input_meta,temp_gsva)
+
 
 
 ```
 
 ```{r run survival cut tree analysis}
 
-temp_meta <- input_meta
+input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
+input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
+
+temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
+colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+temp_meta <- cbind(input_meta,temp_gsva)
+
 ##Modified one entry with 0 for survival time that was causing an error
 temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
 
 temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
 
 fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(cp=0.02,maxdepth=4,
-                                                                                     minsplit = round(nrow(input_meta)/5),
-                                                                                     minbucket = round(nrow(input_meta)/10)))
+                                                                                     minsplit = round(nrow(temp_meta)/5),
+                                                                                     minbucket = round(nrow(temp_meta)/10)))
 plot(fit,  uniform=TRUE,  main="Survival Tree")
 
 text(fit, use.n=TRUE, all=TRUE, cex=.8)
@@ -231,54 +240,94 @@ text(fit, use.n=TRUE, all=TRUE, cex=.8)
 
 input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
 
-my_gene_set <- all_gmts$CIBERSORT.Neutrophils
+my_gene_set1 <- all_gmts$Moffitt.F6_BasalLike.top100
+my_gene_set2 <- all_gmts$CIBERSORT.Neutrophils
 
-gene_set_list <- list(my_gene_set)
+gene_set_list <- list("Moffitt_F6_BasalLike_top100" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
 
-# Add module score to Seurat object
-seurat_obj <- AddModuleScore(
-    object   = input_scData,
-    features = gene_set_list,
-    name     = "MyGeneSet"
-)
+seurat_obj <- input_scData
 
-FeaturePlot(
+for(temp_i in 1:length(gene_set_list)){
+  
+  # Add module score to Seurat object
+  seurat_obj <- AddModuleScore(
+    object   = seurat_obj,
+    features = list(gene_set_list[[temp_i]]),
+    name     = "CustomGeneset"
+  )
+  
+  temp_plot <- DimPlot(seurat_obj, group.by = "Cell_type")
+  print(temp_plot)
+
+  temp_plot <- FeaturePlot(
     object   = seurat_obj, 
-    features = "MyGeneSet1", 
+    features = "CustomGeneset1", 
     pt.size  = 0.5
-)
+  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
 
-VlnPlot(
+  temp_plot <- VlnPlot(
     object   = seurat_obj, 
-    features = "MyGeneSet1", 
+    features = "CustomGeneset1", 
     group.by = "Cell_type"  # or your cell type annotation column
-)
+  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
 
-DotPlot(
+  temp_plot <- DotPlot(
     seurat_obj, 
-    features  = my_gene_set, 
+    features  = gene_set_list[[temp_i]], 
     group.by  = "Cell_type"
-) + RotatedAxis()
+  ) + RotatedAxis() + 
+    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
 
-RidgePlot(seurat_obj, features = "MyGeneSet1", group.by = "Cell_type")
+  temp_plot <- RidgePlot(seurat_obj, features = "CustomGeneset1", group.by = "Cell_type") + 
+    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
+  
+}
+
+temp_scMarkers <- list()
 
 ##Extract ductal cell type 2 and macrophage markers for classifier derivation
-test_markers <- FindMarkers(
+temp_scMarkers[["Ductal_cell_type_2"]] <- 
+  FindMarkers(
     object        = input_scData,
     ident.1       = "Ductal cell type 2",       # cell type or cluster name
     only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
-    logfc.threshold = 0.25,          # filter out genes with low logFC
+    logfc.threshold = 1.5,          # filter out genes with low logFC
     min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
-)
+  )
+
+temp_scMarkers[["Macrophage_cell"]] <- 
+  FindMarkers(
+      object        = input_scData,
+      ident.1       = "Macrophage cell",       # cell type or cluster name
+      only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
+      logfc.threshold = 1.25,          # filter out genes with low logFC
+      min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
+  )
+
+saveRDS(temp_scMarkers,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
 
 
 ```
 
 ```{r derive classifier for survival variables}
 
+input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
+input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
+
+temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
+colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+temp_meta <- cbind(input_meta,temp_gsva)
+
 ##Define group based on survival tree cutpoints
+temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High <- as.factor(temp_meta$GSVA_Moffitt.F6_BasalLike.top100 >= -0.3686)
+temp_meta$CustomGroup_CIBERSORT_Neutrophils_High <- as.factor(temp_meta$GSVA_CIBERSORT.Neutrophils >= 0.03927)
 
 ##Use subset of genes from scRNAseq to identify classifier using switchBox and ncvreg packages
+temp_scMarkers <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
 
 ##Compare classifier to existing Purist classifier
 
