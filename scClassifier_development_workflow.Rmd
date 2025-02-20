@@ -498,6 +498,20 @@ apply_TSP_classifier <- function(input_expression, input_classifier, use_with_mi
   return(temp_classifier_result)
 }
 
+#Load and format Purist classifier
+load("E:/Projects/Cancer/fitteds_public_2019-02-12.Rdata")
+temp_TSPs <- classifs$oct25_equivalent_freeze$TSPs
+temp_coefs <- classifs$oct25_equivalent_freeze$fit$beta
+temp_intercept <- temp_coefs[1]
+temp_coefs <- temp_coefs[-1]
+temp_TSPs <- temp_TSPs[temp_coefs != 0,]
+temp_coefs <- temp_coefs[temp_coefs != 0]
+temp_TSPs <- as.data.frame(list(geneA=temp_TSPs[,1], geneB=temp_TSPs[,2], coef=temp_coefs))
+best_cutoffs <- c(0.5)
+
+temp_TSP_classifier <- list(intercept=temp_intercept,TSPs=temp_TSPs,best_cutoff_probs=best_cutoffs)
+all_classifiers[["Purist"]] <- temp_TSP_classifier
+
 ##Apply derived classifiers as well as published Purist classifier
 all_classifier_results <- list()
 for(temp_i in 1:length(all_classifiers)){
@@ -505,7 +519,42 @@ for(temp_i in 1:length(all_classifiers)){
   all_classifier_results[[temp_classifier_name]] <- apply_TSP_classifier(input_expr,all_classifiers[[temp_classifier_name]])
 }
 
+##Compare results to Purist in TCGA PAAD
+temp_meta$test_surv_group1 <- as.factor(all_classifier_results$PDAC_tumor$group)
+temp_meta$test_surv_group2 <- as.factor(all_classifier_results$Purist$group)
 
+# Create the Surv object
+surv_object <- Surv(time = temp_meta$Survival_OS_time, event = temp_meta$Survival_OS)
+
+# Kaplan-Meier fit by 'group'
+fit1 <- survfit(surv_object ~ test_surv_group1, data = temp_meta)
+fit2 <- survfit(surv_object ~ test_surv_group2, data = temp_meta)
+
+# Use ggsurvplot for a survival curve of both classifier groups
+temp_plot1 <- ggsurvplot(fit1, 
+              data = temp_meta,
+              pval = TRUE,            # adds p-value for log-rank test
+              conf.int = TRUE,        # adds confidence intervals
+              risk.table = TRUE,      # add risk table at the bottom
+              xlab = "Time",
+              ylab = "Survival Probability",
+              legend.title = "Group",
+              legend.labs = levels(temp_meta$test_surv_group1),
+              title = "Overall survival with scClassifier groups")
+
+temp_plot2 <- ggsurvplot(fit2, 
+              data = temp_meta,
+              pval = TRUE,            # adds p-value for log-rank test
+              conf.int = TRUE,        # adds confidence intervals
+              risk.table = TRUE,      # add risk table at the bottom
+              xlab = "Time",
+              ylab = "Survival Probability",
+              legend.title = "Group",
+              legend.labs = levels(temp_meta$test_surv_group2),
+              title = "Overall survival with Purist groups")
+
+print(temp_plot1)
+print(temp_plot2)
 
 
 ```
