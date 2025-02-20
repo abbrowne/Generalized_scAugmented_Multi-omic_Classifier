@@ -401,14 +401,16 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   return(temp_TSP_classifier)
 }
 
-##Rerun with function
+##Run with function
 all_classifiers <- list()
 
+##Run for PDAC tumor
 test_expression <- input_expr
 test_group <- as.vector(as.integer(temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High)-1)
 test_scMarkers <- rownames(temp_scMarkers$Ductal_cell_type_2)
 all_classifiers[["PDAC_tumor"]] <- create_ncvTSP_classifier(test_expression, test_group, test_scMarkers)
 
+##Run for PDAC macrophages
 test_expression <- input_expr
 test_group <- as.vector(as.integer(temp_meta$CustomGroup_CIBERSORT_Neutrophils_High)-1)
 test_scMarkers <- rownames(temp_scMarkers$Macrophage_cell)
@@ -428,6 +430,111 @@ all_classifiers[["PDAC_macrophage"]] <- create_ncvTSP_classifier(test_expression
 #If cell type enrichment fails, rerun survival cutpoint analysis with variation in cp, minsplit, and minbucket variables
 #For cell type enrichment, determine a certain fold enrichment over other cell types that is acceptable
 #Option to also assess 2nd level of cuts for additional cell type specificity as with macrophages in PDAC
+
+###Testing this iterative process below
+
+find_cellEnrichedPrognostic_scores <- function(input_meta,
+                                               input_gsva,
+                                               input_outcome_time,
+                                               input_outcome_result,
+                                               input_sc_dataset){
+  
+  
+}
+
+##Load metadata and GSVA scores and add them to metadata
+input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
+input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
+temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
+colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+temp_meta <- cbind(input_meta,temp_gsva)
+
+##Modified one entry with 0 for survival time that was causing an error
+temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
+
+##Create survival formula for assessing all included GSVA scores in relation to overall survival
+temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
+
+##Run and plot survival cutpoint analysis to identify the most prognostic covariates and cutpoints for the proposed survival model
+fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(cp=0.02,maxdepth=4,
+                                                                                     minsplit = round(nrow(temp_meta)/5),
+                                                                                     minbucket = round(nrow(temp_meta)/10)))
+
+plot(fit,  uniform=TRUE,  main="Survival Tree")
+text(fit, use.n=TRUE, all=TRUE, cex=.8)
+
+##Load PDAC scRNAseq reference atlas from Chijimatsu et al. paper
+input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
+
+##Load top gene sets from survival cutpoint analysis
+my_gene_set1 <- all_gmts$Moffitt.F6_BasalLike.top100
+my_gene_set2 <- all_gmts$CIBERSORT.Neutrophils
+gene_set_list <- list("Moffitt_F6_BasalLike_top100" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
+
+##Evaluate the top prognostic gene sets for their enrichment in a specific cell type in the PDAC scRNAseq atlas
+seurat_obj <- input_scData
+for(temp_i in 1:length(gene_set_list)){
+
+  # Add module score to Seurat object
+  seurat_obj <- AddModuleScore(
+    object   = seurat_obj,
+    features = list(gene_set_list[[temp_i]]),
+    name     = "CustomGeneset"
+  )
+  
+  temp_plot <- DimPlot(seurat_obj, group.by = "Cell_type")
+  print(temp_plot)
+
+  temp_plot <- FeaturePlot(
+    object   = seurat_obj, 
+    features = "CustomGeneset1", 
+    pt.size  = 0.5
+  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
+
+  temp_plot <- VlnPlot(
+    object   = seurat_obj, 
+    features = "CustomGeneset1", 
+    group.by = "Cell_type"  # or your cell type annotation column
+  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
+
+  temp_plot <- DotPlot(
+    seurat_obj, 
+    features  = gene_set_list[[temp_i]], 
+    group.by  = "Cell_type"
+  ) + RotatedAxis() + 
+    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
+
+  temp_plot <- RidgePlot(seurat_obj, features = "CustomGeneset1", group.by = "Cell_type") + 
+    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
+  print(temp_plot)
+  
+}
+
+##Extract and save marker genes for cell types that showed enrichment of the top prognostic GSVA scores
+temp_scMarkers <- list()
+temp_scMarkers[["Ductal_cell_type_2"]] <- 
+  FindMarkers(
+    object        = input_scData,
+    ident.1       = "Ductal cell type 2",       # cell type or cluster name
+    only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
+    logfc.threshold = 1.5,          # filter out genes with low logFC
+    min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
+  )
+
+temp_scMarkers[["Macrophage_cell"]] <- 
+  FindMarkers(
+      object        = input_scData,
+      ident.1       = "Macrophage cell",       # cell type or cluster name
+      only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
+      logfc.threshold = 1.25,          # filter out genes with low logFC
+      min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
+  )
+
+#saveRDS(temp_scMarkers,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
+
 
 ```
 
