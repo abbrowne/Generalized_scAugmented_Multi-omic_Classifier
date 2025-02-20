@@ -397,7 +397,38 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
                                   geneB=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][2])),
                                   coef=as.numeric(temp_coefs[-1])))
   
-  temp_TSP_classifier <- list(intercept=as.numeric(temp_coefs[1]),TSPs=temp_TSPs)
+  ##Derive recommended probability cutoff
+  all_TSPs <- c(temp_TSPs$geneA,temp_TSPs$geneB)
+  sub_expr <- input_expression[rownames(input_expression) %in% all_TSPs,]
+  
+  temp_resultMat <- list()
+  for(temp_i in 1:nrow(temp_TSPs)){
+    temp_name <- paste0(temp_TSPs$geneA[temp_i],"_",temp_TSPs$geneB[temp_i])
+    temp_resultMat[[temp_name]] <- as.vector(as.integer(sub_expr[temp_TSPs$geneA[temp_i],] > sub_expr[temp_TSPs$geneB[temp_i],]))
+  }
+  temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(sub_expr))
+  
+  ### p = exp(x*coef) / (1 + exp(x*coef))
+  temp_resultVector <- rowSums(t(t(temp_resultMat) * temp_TSPs$coef))
+  temp_resultProb <- exp(temp_resultVector) / (1 + exp(temp_resultVector))
+  all_cutoff_values <- seq(1,99)/100
+  min_errors <- length(input_group)
+  for(temp_cutoff_i in 1:length(all_cutoff_values)){
+    temp_cutoff_value <- all_cutoff_values[temp_cutoff_i]
+    temp_table <- table(input_group,temp_resultProb > temp_cutoff_value)
+    if(nrow(temp_table) == 2 & ncol(temp_table) == 2){
+      temp_errors <- sum(temp_table[1,2] + temp_table[2,1])
+      if(temp_errors < min_errors){
+        min_errors <- temp_errors
+        best_cutoffs <- c(temp_cutoff_value)
+      }else if(temp_errors == min_errors){
+        best_cutoffs <- c(best_cutoffs,temp_cutoff_value)
+      }
+    }
+  }
+  
+  ##Return classifier
+  temp_TSP_classifier <- list(intercept=as.numeric(temp_coefs[1]),TSPs=temp_TSPs,best_cutoff_probs=best_cutoffs)
   return(temp_TSP_classifier)
 }
 
@@ -417,6 +448,62 @@ test_scMarkers <- rownames(temp_scMarkers$Macrophage_cell)
 all_classifiers[["PDAC_macrophage"]] <- create_ncvTSP_classifier(test_expression, test_group, test_scMarkers)
 
 ##Compare classifier to existing Purist classifier
+
+##Create function for applying TSP classifier with pairs and coefficients
+apply_TSP_classifier <- function(input_expression, input_classifier, use_with_missing=FALSE, best_cutoff_probability=NULL){
+  
+  if(is.null(best_cutoff_probability)){
+    best_cutoff_probability <- input_classifier$best_cutoff_probs[1]
+  }
+  ##Check for missing classifier genes in input dataset with option to drop those pairs
+  all_TSPs <- c(input_classifier$TSPs$geneA,input_classifier$TSPs$geneB)
+  if(sum(all_TSPs %in% rownames(input_expression)) < length(all_TSPs)){
+    missing_TSPs <- all_TSPs[!(all_TSPs %in% rownames(input_expression))]
+    cat(paste0("The following genes were missing from the input dataset:\n",
+                 paste(missing_TSPs,collapse=", ")))
+    cat(paste0("Full input dataset:\n"))
+    print(input_classifier$TSPs)
+    
+    if(use_with_missing==TRUE){
+      classifier_rows_to_drop <- c()
+      for(temp_i in 1:nrow(input_classifier$TSPs)){
+        if(!(input_classifier$TSPs$geneA[temp_i] %in% rownames(input_expression)) | 
+           !(input_classifier$TSPs$geneB[temp_i] %in% rownames(input_expression))){
+          classifier_rows_to_drop <- c(classifier_rows_to_drop,temp_i)
+        }
+      }
+      input_classifier <- input_classifier$TSPs[-classifier_rows_to_drop,]
+    }else{
+      return(paste0("Error: Failed due to missing classifier genes in the input data"))
+    }
+  }
+  
+  all_TSPs <- c(input_classifier$TSPs$geneA,input_classifier$TSPs$geneB)
+  temp_expr <- input_expression[rownames(input_expression) %in% all_TSPs,]
+  
+  temp_resultMat <- list()
+  for(temp_i in 1:nrow(input_classifier$TSPs)){
+    temp_name <- paste0(input_classifier$TSPs[temp_i,1],"_",input_classifier$TSPs[temp_i,2])
+    temp_resultMat[[temp_name]] <- as.vector(as.integer(temp_expr[input_classifier$TSPs[temp_i,1],] > temp_expr[input_classifier$TSPs[temp_i,2],]))
+  }
+  temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
+  
+  ### p = exp(x*coef) / (1 + exp(x*coef))
+  temp_resultVector <- rowSums(t(t(temp_resultMat) * input_classifier$TSPs$coef))
+  temp_resultProb <- exp(temp_resultVector) / (1 + exp(temp_resultVector))
+  temp_resultGroup <- as.factor(as.numeric(temp_resultProb > best_cutoff_probability))
+  
+  temp_classifier_result <- as.data.frame(list(prob=temp_resultProb,group=temp_resultGroup))
+  rownames(temp_classifier_result) <- colnames(input_expression)
+  return(temp_classifier_result)
+}
+
+##Apply derived classifiers as well as published Purist classifier
+all_classifier_results <- list()
+for(temp_i in 1:length(all_classifiers)){
+  temp_classifier_name <- names(all_classifiers)[temp_i]
+  all_classifier_results[[temp_classifier_name]] <- apply_TSP_classifier(input_expr,all_classifiers[[temp_classifier_name]])
+}
 
 
 
