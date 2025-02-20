@@ -33,6 +33,8 @@ library(ncvreg)
 
 ```{r get all TCGA PAAD expression}
 
+##Use recount3 to retrieve expression data for TCGA PAAD and normalize using different approaches
+
 human_projects <- available_projects()
 
 tcga_paad_info = subset(
@@ -42,12 +44,11 @@ tcga_paad_info = subset(
 
 proj_info <- map(seq(nrow(tcga_paad_info)), ~tcga_paad_info[.x, ])
 
-## create the RangedSummarizedExperiment. the create_rse function works on 
-## one row a time 
+## create the RangedSummarizedExperiment. the create_rse function works on one row a time 
 
 rse_tcga_paad <- map(proj_info, ~create_rse(.x))
 
-#### Creating TPM
+#### Creating TPM from counts and transcript length
 count2tpm<- function(rse){
     count_matrix <- rse@assays@data$raw_counts
     gene_length <- rse@rowRanges$bp_length
@@ -76,6 +77,7 @@ count_data2 <- purrr::reduce(count_data,cbind)
 ## bind the metadata across cancer types together
 metadata2<- purrr::reduce(metadata, rbind)
 
+##Ensure idential ID naming across datasets and save them
 rownames(metadata2) <- metadata2$tcga.gdc_cases.samples.submitter_id
 colnames(count_data2) <- rownames(metadata2)
 colnames(tpm_data2) <- rownames(metadata2)
@@ -96,28 +98,31 @@ saveRDS(metadata2,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_meta_data.R
 
 ```{r load data}
 
+#Load expression and metadata files
 input_counts <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_count_data.RDS")
 input_counts <- input_counts[,order(colnames(input_counts))]
 input_tpm <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_TPM_data.RDS")
 input_tpm <- input_tpm[,order(colnames(input_tpm))]
 input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_meta_data.RDS")
 input_meta <- input_meta[order(rownames(input_meta)),]
+
+##Load and add survival data to metadata
 input_surv <- read.table("E:/Projects/Example_data/TCGA_PAAD/survival_PAAD_survival.txt",sep="\t",header=TRUE,row.names=1)
 rownames(input_surv) <- paste0(rownames(input_surv),"A")
 colnames(input_surv) <- paste0("Survival_",colnames(input_surv))
 sum(rownames(input_surv) %in% rownames(input_meta))
 sum(colnames(input_surv) %in% colnames(input_meta))
-
 input_meta <- cbind(input_meta,input_surv[rownames(input_meta),])
+
 ##Replace . with _ for column names
 names(input_meta) <- gsub("\\.", "_", names(input_meta))
+
+##Reformat and factor primary sample type column used as covariate in modeling
 input_meta$sample_type <- input_meta$tcga_cgc_sample_sample_type
 input_meta$sample_type[input_meta$sample_type == "Primary Tumor"] <- "Tumor"
 input_meta$sample_type[input_meta$sample_type == "Metastatic"] <- "Met"
 input_meta$sample_type[input_meta$sample_type == "Solid Tissue Normal"] <- "Normal"
 input_meta$sample_type <- factor(input_meta$sample_type,levels=c("Normal","Tumor","Met"))
-
-##Derive other normalized expression matrices
 
 ### Check that sample names match in both files
 all(colnames(input_counts) %in% rownames(input_meta))
@@ -145,6 +150,7 @@ symbol_map <- mapIds(
     multiVals = "first"       # If multiple symbols map to one ID, take the first
 )
 
+##Replace ensembl IDs with symbols if not NA and not duplicated
 temp_rownames <- ifelse(
     is.na(symbol_map[gene_ids_clean]),
     gene_ids_clean,
@@ -155,7 +161,6 @@ rownames(input_counts) <- ifelse(
     gene_ids_clean,
     temp_rownames
 )
-
 rownames(input_tpm) <- rownames(input_counts)
 
 ##Derive CPM
@@ -177,6 +182,7 @@ input_vst <- assay(vsd)
 
 saveRDS(input_vst,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_DESeq2_normalized_vst.RDS")
 
+##Save all expression formats and metadata
 input_expression_set <- list(log2CPM=log2(input_cpm+1),log2TPM=log2(input_tpm+1),log2TMM=log2(input_cpmtmm+1),VST=input_vst)
 saveRDS(input_expression_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
 saveRDS(input_meta,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
@@ -186,8 +192,10 @@ saveRDS(input_meta,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_me
 
 ```{r derive scores}
 
+##Load expression set
 input_expression_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
 
+##Load example GMTs relevant to TCGA PAAD
 hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
 pdac_genesets <- pdacR::gene_lists
 pdac_genesets$Moffitt.Tumor <- NULL
@@ -197,10 +205,11 @@ pdac_genesets$Moffitt.Top5s <- NULL
 pdac_genesets$Moffitt.Top25s <- NULL
 all_gmts <- c(hp_gmt,pdac_genesets)
 
+##This geneset can be used to chromosomal locus estimates
 #c1_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/c1.all.v2024.1.Hs.symbols.gmt")
 
+##Run GSVA on all included genesets to derive a score and save
 input_gsva_set <- list(GSVA=list())#,ssGSEA=list())
-
 for(temp_input_i in 1:length(input_expression_set)){
   temp_name <- names(input_expression_set)[[temp_input_i]]
   input_gsva_set$GSVA[[temp_name]] <- gsva(gsvaParam(input_expression_set[[temp_name]],all_gmts))
@@ -215,9 +224,9 @@ saveRDS(input_gsva_set,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_s
 
 ```{r run survival cut tree analysis}
 
+##Load metadata and GSVA scores and add them to metadata
 input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
 input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
-
 temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
 colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
 temp_meta <- cbind(input_meta,temp_gsva)
@@ -225,30 +234,33 @@ temp_meta <- cbind(input_meta,temp_gsva)
 ##Modified one entry with 0 for survival time that was causing an error
 temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
 
+##Create survival formula for assessing all included GSVA scores in relation to overall survival
 temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
 
+##Run and plot survival cutpoint analysis to identify the most prognostic covariates and cutpoints for the proposed survival model
 fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(cp=0.02,maxdepth=4,
                                                                                      minsplit = round(nrow(temp_meta)/5),
                                                                                      minbucket = round(nrow(temp_meta)/10)))
-plot(fit,  uniform=TRUE,  main="Survival Tree")
 
+plot(fit,  uniform=TRUE,  main="Survival Tree")
 text(fit, use.n=TRUE, all=TRUE, cex=.8)
 
 ```
 
 ```{r determine best signature celltype drivers with scRNAseq reference}
 
+##Load PDAC scRNAseq reference atlas from Chijimatsu et al. paper
 input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
 
+##Load top gene sets from survival cutpoint analysis
 my_gene_set1 <- all_gmts$Moffitt.F6_BasalLike.top100
 my_gene_set2 <- all_gmts$CIBERSORT.Neutrophils
-
 gene_set_list <- list("Moffitt_F6_BasalLike_top100" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
 
+##Evaluate the top prognostic gene sets for their enrichment in a specific cell type in the PDAC scRNAseq atlas
 seurat_obj <- input_scData
-
 for(temp_i in 1:length(gene_set_list)){
-  
+
   # Add module score to Seurat object
   seurat_obj <- AddModuleScore(
     object   = seurat_obj,
@@ -287,9 +299,8 @@ for(temp_i in 1:length(gene_set_list)){
   
 }
 
+##Extract and save marker genes for cell types that showed enrichment of the top prognostic GSVA scores
 temp_scMarkers <- list()
-
-##Extract ductal cell type 2 and macrophage markers for classifier derivation
 temp_scMarkers[["Ductal_cell_type_2"]] <- 
   FindMarkers(
     object        = input_scData,
@@ -315,25 +326,30 @@ saveRDS(temp_scMarkers,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_explor
 
 ```{r derive classifier for survival variables}
 
+##Load metadata, GSVA scores, and expression data for TCGA PAAD
 input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
 input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
 input_expression_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
 
+##Add GSVA scores to metadata
 temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
 colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
 temp_meta <- cbind(input_meta,temp_gsva)
 
-##Define group based on survival tree cutpoints
+##Define group based on top survival tree cutpoint results
 temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High <- as.factor(temp_meta$GSVA_Moffitt.F6_BasalLike.top100 >= -0.3686)
 temp_meta$CustomGroup_CIBERSORT_Neutrophils_High <- as.factor(temp_meta$GSVA_CIBERSORT.Neutrophils >= 0.03927)
 
-##Use subset of genes from scRNAseq to identify classifier using switchBox and ncvreg packages
+##Use marker genes from scRNAseq as input to consider for top scoring pair classifier derivation
 temp_scMarkers <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
 input_expr <- input_expression_set$log2TPM
 temp_expr <- input_expr[rownames(input_expr) %in% rownames(temp_scMarkers$Ductal_cell_type_2),]
-temp_group <- temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High
 
+##Define group for classification and run switchBox function to identify pairs of genes that can be used to identify it
+temp_group <- temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High
 temp_TSP_result <- SWAP.KTSP.Train(temp_expr,temp_group,krange = 50,FilterFunc = NULL)
+
+##Format gene pairs into binary matrix of comparisons for each sample to use in logistic regression
 temp_resultMat <- list()
 for(temp_i in 1:nrow(temp_TSP_result$TSPs)){
   temp_name <- paste0(temp_TSP_result$TSPs[temp_i,1],"_",temp_TSP_result$TSPs[temp_i,2])
@@ -341,6 +357,7 @@ for(temp_i in 1:nrow(temp_TSP_result$TSPs)){
 }
 temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
 
+##Perform logistic regression using top scoring pair result matrix and classification group to derive coefficients for each gene pair
 test_ncv_result <- ncvreg(temp_resultMat,
                           as.vector(as.integer(temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High)-1), alpha=0.5, max.iter = nrow(temp_resultMat))
 
