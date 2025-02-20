@@ -343,6 +343,8 @@ temp_meta$CustomGroup_CIBERSORT_Neutrophils_High <- as.factor(temp_meta$GSVA_CIB
 ##Use marker genes from scRNAseq as input to consider for top scoring pair classifier derivation
 temp_scMarkers <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
 input_expr <- input_expression_set$log2TPM
+
+###Run classification for Ductal cell type 2
 temp_expr <- input_expr[rownames(input_expr) %in% rownames(temp_scMarkers$Ductal_cell_type_2),]
 
 ##Define group for classification and run switchBox function to identify pairs of genes that can be used to identify it
@@ -358,14 +360,74 @@ for(temp_i in 1:nrow(temp_TSP_result$TSPs)){
 temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
 
 ##Perform logistic regression using top scoring pair result matrix and classification group to derive coefficients for each gene pair
-test_ncv_result <- ncvreg(temp_resultMat,
-                          as.vector(as.integer(temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High)-1), alpha=0.5, max.iter = nrow(temp_resultMat))
+test_ncv_result <- cv.ncvreg(temp_resultMat,
+                             as.vector(as.integer(temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High)-1), alpha=0.5, nfolds = nrow(temp_resultMat))
 
+temp_coefs <- coef(test_ncv_result)
+temp_coefs <- temp_coefs[temp_coefs != 0]
+temp_TSPs <- as.data.frame(list(geneA=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][1])),
+                                geneB=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][2])),
+                                coef=as.numeric(temp_coefs[-1])))
+
+temp_TSP_classifier <- list(intercept=as.numeric(temp_coefs[1]),TSPs=temp_TSPs)
+
+##Create function for classifier development
+
+create_ncvTSP_classifier <- function(input_expression, input_group, input_scMarkers){
+  temp_expr <- input_expression[rownames(input_expression) %in% input_scMarkers,]
+  
+  temp_TSP_result <- SWAP.KTSP.Train(temp_expr,as.factor(input_group),krange = 50,FilterFunc = NULL)
+
+  ##Format gene pairs into binary matrix of comparisons for each sample to use in logistic regression
+  temp_resultMat <- list()
+  for(temp_i in 1:nrow(temp_TSP_result$TSPs)){
+    temp_name <- paste0(temp_TSP_result$TSPs[temp_i,1],"_",temp_TSP_result$TSPs[temp_i,2])
+    temp_resultMat[[temp_name]] <- as.vector(as.integer(temp_expr[temp_TSP_result$TSPs[temp_i,1],] > temp_expr[temp_TSP_result$TSPs[temp_i,2],]))
+  }
+  temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
+  
+  ##Perform logistic regression using top scoring pair result matrix and classification group to derive coefficients for each gene pair
+  test_ncv_result <- cv.ncvreg(temp_resultMat,
+                               input_group, 
+                               alpha=0.5, nfolds = nrow(temp_resultMat))
+  
+  temp_coefs <- coef(test_ncv_result)
+  temp_coefs <- temp_coefs[temp_coefs != 0]
+  temp_TSPs <- as.data.frame(list(geneA=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][1])),
+                                  geneB=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][2])),
+                                  coef=as.numeric(temp_coefs[-1])))
+  
+  temp_TSP_classifier <- list(intercept=as.numeric(temp_coefs[1]),TSPs=temp_TSPs)
+  return(temp_TSP_classifier)
+}
+
+##Rerun with function
+all_classifiers <- list()
+
+test_expression <- input_expr
+test_group <- as.vector(as.integer(temp_meta$CustomGroup_Moffitt_F6_BasalLike_Top100_High)-1)
+test_scMarkers <- rownames(temp_scMarkers$Ductal_cell_type_2)
+all_classifiers[["PDAC_tumor"]] <- create_ncvTSP_classifier(test_expression, test_group, test_scMarkers)
+
+test_expression <- input_expr
+test_group <- as.vector(as.integer(temp_meta$CustomGroup_CIBERSORT_Neutrophils_High)-1)
+test_scMarkers <- rownames(temp_scMarkers$Macrophage_cell)
+all_classifiers[["PDAC_macrophage"]] <- create_ncvTSP_classifier(test_expression, test_group, test_scMarkers)
 
 ##Compare classifier to existing Purist classifier
 
 
 
+
+```
+
+```{r next steps for planning}
+
+###Create iterative loop for combined survival cutpoint and cell type enrichment analysis to loop until score with prognostic value and cell type enrichment are found
+#For this, assess survival cutpoint 1 for cell type enrichment past a certain fold in a relevant atlas for the indication in question
+#If cell type enrichment fails, rerun survival cutpoint analysis with variation in cp, minsplit, and minbucket variables
+#For cell type enrichment, determine a certain fold enrichment over other cell types that is acceptable
+#Option to also assess 2nd level of cuts for additional cell type specificity as with macrophages in PDAC
 
 ```
 
