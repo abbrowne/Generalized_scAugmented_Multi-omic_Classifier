@@ -28,6 +28,9 @@ library(Seurat)
 library(ggplot2)
 library(switchBox)
 library(ncvreg)
+library(stringr)
+library(survival)
+library(survminer)
 
 ```
 
@@ -573,103 +576,140 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
                                                input_gsva,
                                                input_outcome_time,
                                                input_outcome_result,
-                                               input_sc_dataset){
+                                               input_sc_dataset,
+                                               input_gmts){
+  temp_gsva <- t(input_gsva)[rownames(input_meta),]
+  colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+  temp_meta <- cbind(input_meta,temp_gsva)
   
+  ##Create survival formula for assessing all included GSVA scores in relation to overall survival
+  temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                    paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
   
+  temp_cp <- 0.05
+  temp_minsplit <- round(nrow(temp_meta)/5)
+  temp_minbucket <- round(nrow(temp_meta)/10)
+  
+  flag_primary_cutpoint_sc_enrichment <- FALSE
+  final_iterations <- 0
+  temp_progFeature <- NULL
+  temp_progCutoff <- NULL
+  cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
+  while(flag_primary_cutpoint_sc_enrichment == FALSE & final_iterations < 10){
+    temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
+                      control = rpart.control(cp=temp_cp,
+                                              maxdepth=1,
+                                              minsplit = temp_minsplit,
+                                              minbucket = temp_minbucket))
+    temp_progFeature <- names(temp_fit$variable.importance)[1]
+    temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
+    
+    input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
+    
+    # Add module score to Seurat object
+    seurat_obj <- AddModuleScore(
+      object   = input_sc_dataset,
+      features = list(input_gmts[[input_geneset_name]]),
+      name     = "CustomGeneset"
+    )
+    temp_result <- as.data.frame(seurat_obj@meta.data %>% 
+                                 group_by(Cell_type) %>% 
+                                 summarize(mean_ModuleScore = mean(CustomGeneset1)))
+    temp_min <- min(temp_result$mean_ModuleScore)
+    temp_result$norm_Module_score <- temp_result$mean_ModuleScore - temp_min
+    temp_max_i <- which.max(temp_result$norm_Module_score)
+    temp_max_value <- temp_result$norm_Module_score[temp_max_i]
+    temp_max_cell_type <- temp_result$Cell_type[temp_max_i]
+    comp_result <- temp_result$norm_Module_score[temp_result$Cell_type != temp_max_cell_type]
+    
+    if(sum(temp_max_value >= comp_result*2) == length(comp_result)){
+      flag_primary_cutpoint_sc_enrichment <- TRUE
+      plot(temp_fit,  uniform=TRUE,  main="Survival Tree")
+      text(temp_fit, use.n=TRUE, all=TRUE, cex=.8)
+      temp_best_surv_plot <- recordPlot()
+    }else{
+      if(temp_cp > 0.01){
+        temp_cp <- temp_cp - 0.01
+      }else{
+        if(final_iterations <= 9){
+          temp_minsplit <- temp_minsplit * 0.8
+          temp_minbucket <- temp_minbucket * 0.8
+        }
+        final_iterations <- final_iterations + 1
+      }
+    }
+  }
+  
+  if(flag_primary_cutpoint_sc_enrichment == TRUE){
+    
+    cat(paste0("Running single cell marker derivation to obtain a marker list between 500 and 1000 genes in size.\n"))
+    
+    temp_thresholdFC <- 1.5
+    temp_scMarker_size <- 0
+    temp_scMarkers <- NULL
+    enrichment_iterations <- 0
+    while((temp_scMarker_size < 500 | temp_scMarker_size > 1000) & enrichment_iterations < 10){
+      temp_scMarkers <- FindMarkers(
+        object        = input_sc_dataset,
+        ident.1       = temp_max_cell_type,       # cell type or cluster name
+        only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
+        logfc.threshold = temp_thresholdFC,          # filter out genes with low logFC
+        min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
+        )
+      temp_scMarker_size <- nrow(temp_scMarkers)
+      if(temp_scMarker_size > 1000){
+        temp_thresholdFC <- temp_thresholdFC * 1.1
+        enrichment_iterations <- enrichment_iterations + 1
+      }else if(temp_scMarker_size < 500){
+        temp_thresholdFC <- temp_thresholdFC * 0.5
+        enrichment_iterations <- enrichment_iterations + 1
+      }
+    }
+    if(enrichment_iterations == 10){
+      cat(paste0("Failed to identify sufficient numbers of enriched markers for the cell type associating with the identified prognostic feature.\n",
+                 "The best obtained marker list will be returned despite being outside the optimal range of approximately 500-1000 genes.\n"))
+    }
+    final_prog_info <- list(final_progFeature=temp_progFeature,
+                            final_progCutoff=temp_progCutoff,
+                            final_survPlot=temp_best_surv_plot,
+                            final_cp=temp_cp,
+                            final_minsplit=temp_minsplit,
+                            final_minbucket=temp_minbucket,
+                            final_enriched_cellType=temp_max_cell_type,
+                            final_scMarkers=temp_scMarkers,
+                            final_scMarker_enrichment_threshold=temp_thresholdFC)
+    return(final_prog_info)
+  }else{
+    temp_message <- paste0("Failed to identify meaningful prognostic groups for a score showing cell type enrichment.\n")
+    return(temp_message)
+  }
 }
 
 ##Load metadata and GSVA scores and add them to metadata
-input_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
-input_gsva_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
-temp_gsva <- t(input_gsva_set$GSVA$log2CPM)[rownames(input_meta),]
-colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
-temp_meta <- cbind(input_meta,temp_gsva)
+test_sc_dataset <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
 
+test_outcome_time <- "Survival_OS_time"
+test_outcome_result <- "Survival_OS"
+
+test_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
 ##Modified one entry with 0 for survival time that was causing an error
-temp_meta$Survival_OS_time[temp_meta$Survival_OS_time == 0] <- 1
+test_meta$Survival_OS_time[test_meta$Survival_OS_time == 0] <- 1
 
-##Create survival formula for assessing all included GSVA scores in relation to overall survival
-temp_formula <- as.formula(paste0("Surv(Survival_OS_time, Survival_OS) ~ ",paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
+test_gsva <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
+test_gsva <- test_gsva$GSVA$log2CPM
 
-##Run and plot survival cutpoint analysis to identify the most prognostic covariates and cutpoints for the proposed survival model
-fit <- rpart(temp_formula, data = temp_meta, method = "exp", control = rpart.control(cp=0.02,maxdepth=4,
-                                                                                     minsplit = round(nrow(temp_meta)/5),
-                                                                                     minbucket = round(nrow(temp_meta)/10)))
+##Load example GMTs relevant to TCGA PAAD
+hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
+pdac_genesets <- pdacR::gene_lists
+pdac_genesets$Moffitt.Tumor <- NULL
+pdac_genesets$Puleo.Centroids <- NULL
+pdac_genesets$ICGC.SAM <- NULL
+pdac_genesets$Moffitt.Top5s <- NULL
+pdac_genesets$Moffitt.Top25s <- NULL
+all_gmts <- c(hp_gmt,pdac_genesets)
+test_gmts <- all_gmts
 
-plot(fit,  uniform=TRUE,  main="Survival Tree")
-text(fit, use.n=TRUE, all=TRUE, cex=.8)
-
-##Load PDAC scRNAseq reference atlas from Chijimatsu et al. paper
-input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
-
-##Load top gene sets from survival cutpoint analysis
-my_gene_set1 <- all_gmts$Moffitt.F6_BasalLike.top100
-my_gene_set2 <- all_gmts$CIBERSORT.Neutrophils
-gene_set_list <- list("Moffitt_F6_BasalLike_top100" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
-
-##Evaluate the top prognostic gene sets for their enrichment in a specific cell type in the PDAC scRNAseq atlas
-seurat_obj <- input_scData
-for(temp_i in 1:length(gene_set_list)){
-
-  # Add module score to Seurat object
-  seurat_obj <- AddModuleScore(
-    object   = seurat_obj,
-    features = list(gene_set_list[[temp_i]]),
-    name     = "CustomGeneset"
-  )
-  
-  temp_plot <- DimPlot(seurat_obj, group.by = "Cell_type")
-  print(temp_plot)
-
-  temp_plot <- FeaturePlot(
-    object   = seurat_obj, 
-    features = "CustomGeneset1", 
-    pt.size  = 0.5
-  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
-  print(temp_plot)
-
-  temp_plot <- VlnPlot(
-    object   = seurat_obj, 
-    features = "CustomGeneset1", 
-    group.by = "Cell_type"  # or your cell type annotation column
-  ) + ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
-  print(temp_plot)
-
-  temp_plot <- DotPlot(
-    seurat_obj, 
-    features  = gene_set_list[[temp_i]], 
-    group.by  = "Cell_type"
-  ) + RotatedAxis() + 
-    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
-  print(temp_plot)
-
-  temp_plot <- RidgePlot(seurat_obj, features = "CustomGeneset1", group.by = "Cell_type") + 
-    ggtitle(paste0("Module score for: ",names(gene_set_list)[temp_i]))
-  print(temp_plot)
-  
-}
-
-##Extract and save marker genes for cell types that showed enrichment of the top prognostic GSVA scores
-temp_scMarkers <- list()
-temp_scMarkers[["Ductal_cell_type_2"]] <- 
-  FindMarkers(
-    object        = input_scData,
-    ident.1       = "Ductal cell type 2",       # cell type or cluster name
-    only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
-    logfc.threshold = 1.5,          # filter out genes with low logFC
-    min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
-  )
-
-temp_scMarkers[["Macrophage_cell"]] <- 
-  FindMarkers(
-      object        = input_scData,
-      ident.1       = "Macrophage cell",       # cell type or cluster name
-      only.pos      = TRUE,            # only keep genes positively enriched in "T cells"
-      logfc.threshold = 1.25,          # filter out genes with low logFC
-      min.pct       = 0.1              # filter out genes not expressed in at least 10% of T cells
-  )
-
-#saveRDS(temp_scMarkers,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_scMarkers.RDS")
+test_result <- find_cellEnrichedPrognostic_scores(test_meta,test_gsva,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
 
 
 ```
