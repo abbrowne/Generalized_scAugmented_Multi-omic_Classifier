@@ -572,46 +572,17 @@ print(temp_plot2)
 
 ###Testing this iterative process below
 
-find_cellEnrichedPrognostic_scores <- function(input_meta,
-                                               input_gsva,
-                                               input_outcome_time,
-                                               input_outcome_result,
-                                               input_sc_dataset,
-                                               input_gmts){
-  temp_gsva <- t(input_gsva)[rownames(input_meta),]
-  colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
-  temp_meta <- cbind(input_meta,temp_gsva)
-  
-  ##Create survival formula for assessing all included GSVA scores in relation to overall survival
-  temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-                                    paste(colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))],collapse = " + ")))
-  
-  temp_cp <- 0.05
-  temp_minsplit <- round(nrow(temp_meta)/5)
-  temp_minbucket <- round(nrow(temp_meta)/10)
-  
-  flag_primary_cutpoint_sc_enrichment <- FALSE
-  final_iterations <- 0
-  temp_progFeature <- NULL
-  temp_progCutoff <- NULL
-  cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
-  while(flag_primary_cutpoint_sc_enrichment == FALSE & final_iterations < 10){
-    temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
-                      control = rpart.control(cp=temp_cp,
-                                              maxdepth=1,
-                                              minsplit = temp_minsplit,
-                                              minbucket = temp_minbucket))
-    temp_progFeature <- names(temp_fit$variable.importance)[1]
-    temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
-    
-    input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
-    
-    # Add module score to Seurat object
-    seurat_obj <- AddModuleScore(
+check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
+  seurat_obj <- NULL
+  seurat_obj <- try(
+    AddModuleScore(
       object   = input_sc_dataset,
       features = list(input_gmts[[input_geneset_name]]),
       name     = "CustomGeneset"
-    )
+    ),
+  silent = TRUE
+  )
+  if(!is.null(seurat_obj)){
     temp_result <- as.data.frame(seurat_obj@meta.data %>% 
                                  group_by(Cell_type) %>% 
                                  summarize(mean_ModuleScore = mean(CustomGeneset1)))
@@ -621,23 +592,128 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
     temp_max_value <- temp_result$norm_Module_score[temp_max_i]
     temp_max_cell_type <- temp_result$Cell_type[temp_max_i]
     comp_result <- temp_result$norm_Module_score[temp_result$Cell_type != temp_max_cell_type]
-    
-    if(sum(temp_max_value >= comp_result*2) == length(comp_result)){
-      flag_primary_cutpoint_sc_enrichment <- TRUE
-      plot(temp_fit,  uniform=TRUE,  main="Survival Tree")
-      text(temp_fit, use.n=TRUE, all=TRUE, cex=.8)
-      temp_best_surv_plot <- recordPlot()
-    }else{
-      if(temp_cp > 0.01){
-        temp_cp <- temp_cp - 0.01
-      }else{
-        if(final_iterations <= 9){
-          temp_minsplit <- temp_minsplit * 0.8
-          temp_minbucket <- temp_minbucket * 0.8
+    temp_result <- list("max_cell_type" = temp_max_cell_type,
+                        "max_module_score" = temp_max_value,
+                        "other_module_scores" = comp_result)
+    return(temp_result)
+  }else{
+    temp_result <- list("max_cell_type" = NA,
+                        "max_module_score" = 0,
+                        "other_module_scores" = c(100,100))
+    return(temp_result)
+  }
+}
+
+find_cellEnrichedPrognostic_scores <- function(input_meta,
+                                               input_outcome_time,
+                                               input_outcome_result,
+                                               input_sc_dataset,
+                                               input_gmts,
+                                               max_iterations=20,
+                                               input_cp_set=c(0.05,0.02),
+                                               initial_minsplit_fraction=0.2,
+                                               initial_minbucket_fraction=0.1,
+                                               minsplit_multiple=0.5,
+                                               minbucket_multiple=0.5,
+                                               max_prog_features_per_fit=5,
+                                               max_enrichment_iterations=10
+                                               ){
+  
+  
+  temp_meta <- input_meta
+  ##Create survival formula for assessing all included GSVA scores in relation to overall survival
+  temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                    paste(paste0("GSVA_",names(input_gmts)),collapse = " + ")))
+  
+  #temp_cp <- 0.05
+  temp_minsplit <- round(nrow(temp_meta)*initial_minsplit_fraction)
+  temp_minbucket <- round(nrow(temp_meta)*initial_minbucket_fraction)
+  temp_cp_set <- input_cp_set
+  
+  flag_primary_cutpoint_sc_enrichment <- FALSE
+  total_iterations <- 0
+  temp_progFeature <- NULL
+  temp_progCutoff <- NULL
+  sub_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
+  cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
+  while(flag_primary_cutpoint_sc_enrichment == FALSE & total_iterations <= max_iterations){
+    if(total_iterations > 0){
+      temp_minsplit <- round(temp_minsplit * minsplit_multiple)
+      temp_minbucket <- round(temp_minbucket * minbucket_multiple)
+      temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                          paste(sub_gsva_columns,collapse = " + ")))
+    }
+    for(temp_cp_i in 1:length(temp_cp_set)){
+      temp_cp <- temp_cp_set[temp_cp_i]
+      temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
+                         control = rpart.control(cp=temp_cp,
+                                                 maxdepth=1,
+                                                 minsplit = temp_minsplit,
+                                                 minbucket = temp_minbucket))
+      
+      for(temp_prog_feature_i in 1:max_prog_features_per_fit){
+        temp_progFeature <- names(temp_fit$variable.importance)[temp_prog_feature_i]
+        temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
+        cat(paste0("Testing cp ",temp_cp," minsplit ",temp_minsplit," and minbucket ",temp_minbucket," with prog feature ",temp_prog_feature_i," : ",temp_progFeature,"\n"))
+        temp_meta$test_surv_group <- as.factor(temp_meta[,temp_progFeature] < temp_progCutoff)
+        temp_surv_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ test_surv_group"))
+        fit_cox <- coxph(temp_surv_formula, data = temp_meta)
+        temp_summary <- summary(fit_cox)
+        print(temp_summary)
+        temp_coxph_pval <- as.numeric(temp_summary$waldtest["pvalue"])
+        if(temp_coxph_pval < 0.05){
+          input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
+          comp_result <- check_sc_enrichment(input_sc_dataset,input_gmts,input_geneset_name)
+          if(sum(comp_result$max_module_score >= comp_result$other_module_scores*2) == length(comp_result$other_module_scores)){
+            flag_primary_cutpoint_sc_enrichment <- TRUE
+            #temp_meta$test_surv_group <- droplevels(temp_meta$test_surv_group)
+            #temp_survFit <- survfit(Surv(time = temp_meta[[input_outcome_time]],
+            #                             event = temp_meta[[input_outcome_result]]) ~ test_surv_group,
+            #                        data = temp_meta)
+            temp_survFit <- survfit(as.formula(paste0("Surv(", 
+                                                      input_outcome_time, ", ", input_outcome_result, 
+                                                      ") ~ test_surv_group")),data = temp_meta)
+            #print(levels(temp_meta$test_surv_group))
+            #print(table(temp_meta$test_surv_group,temp_meta$Survival_OS))
+            #print(all(c(input_outcome_time, input_outcome_result, "test_surv_group") %in% colnames(temp_meta)))
+            #print(nrow(temp_meta))
+            #print(sum(complete.cases(temp_meta[, c(input_outcome_time, input_outcome_result, "test_surv_group")])))
+            #print(summary(temp_survFit))
+            #print(temp_survFit$strata)
+            temp_best_surv_plot <- ggsurvplot(temp_survFit, data = temp_meta,
+              pval = TRUE,            # adds p-value for log-rank test
+              conf.int = TRUE,        # adds confidence intervals
+              risk.table = TRUE,      # add risk table at the bottom
+              xlab = "Time",
+              ylab = "Survival Probability",
+              legend.title = paste0(temp_progFeature, " < ",round(temp_progCutoff,3)),
+              legend.labs = levels(temp_meta$test_surv_group))
+            temp_max_cell_type <- comp_result$max_cell_type
+            temp_meta$test_surv_group <- NULL
+            sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+            temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                              paste(sub_gsva_columns,collapse = " + ")))
+            break
+          }
         }
-        final_iterations <- final_iterations + 1
+        temp_meta$test_surv_group <- NULL
+        sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+        temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                          paste(sub_gsva_columns,collapse = " + ")))
+        total_iterations <- total_iterations + 1
+      }
+      temp_meta$test_surv_group <- NULL
+      sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+      temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                        paste(sub_gsva_columns,collapse = " + ")))
+      if(flag_primary_cutpoint_sc_enrichment == TRUE){
+        break
       }
     }
+    temp_meta$test_surv_group <- NULL
+    sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+    temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                      paste(sub_gsva_columns,collapse = " + ")))
   }
   
   if(flag_primary_cutpoint_sc_enrichment == TRUE){
@@ -648,7 +724,7 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
     temp_scMarker_size <- 0
     temp_scMarkers <- NULL
     enrichment_iterations <- 0
-    while((temp_scMarker_size < 500 | temp_scMarker_size > 1000) & enrichment_iterations < 10){
+    while((temp_scMarker_size < 500 | temp_scMarker_size > 1000) & enrichment_iterations < max_enrichment_iterations){
       temp_scMarkers <- FindMarkers(
         object        = input_sc_dataset,
         ident.1       = temp_max_cell_type,       # cell type or cluster name
@@ -659,13 +735,12 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
       temp_scMarker_size <- nrow(temp_scMarkers)
       if(temp_scMarker_size > 1000){
         temp_thresholdFC <- temp_thresholdFC * 1.1
-        enrichment_iterations <- enrichment_iterations + 1
       }else if(temp_scMarker_size < 500){
         temp_thresholdFC <- temp_thresholdFC * 0.5
-        enrichment_iterations <- enrichment_iterations + 1
       }
+      enrichment_iterations <- enrichment_iterations + 1
     }
-    if(enrichment_iterations == 10){
+    if(enrichment_iterations == max_enrichment_iterations){
       cat(paste0("Failed to identify sufficient numbers of enriched markers for the cell type associating with the identified prognostic feature.\n",
                  "The best obtained marker list will be returned despite being outside the optimal range of approximately 500-1000 genes.\n"))
     }
@@ -691,12 +766,15 @@ test_sc_dataset <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/sc
 test_outcome_time <- "Survival_OS_time"
 test_outcome_result <- "Survival_OS"
 
-test_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
-##Modified one entry with 0 for survival time that was causing an error
-test_meta$Survival_OS_time[test_meta$Survival_OS_time == 0] <- 1
-
 test_gsva <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
 test_gsva <- test_gsva$GSVA$log2CPM
+
+test_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
+test_gsva <- t(test_gsva)[rownames(test_meta),]
+colnames(test_gsva) <- paste0("GSVA_",colnames(test_gsva))
+test_meta <- cbind(test_meta,test_gsva)
+##Modified one entry with 0 for survival time that was causing an error
+test_meta$Survival_OS_time[test_meta$Survival_OS_time == 0] <- 1
 
 ##Load example GMTs relevant to TCGA PAAD
 hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
@@ -709,7 +787,18 @@ pdac_genesets$Moffitt.Top25s <- NULL
 all_gmts <- c(hp_gmt,pdac_genesets)
 test_gmts <- all_gmts
 
-test_result <- find_cellEnrichedPrognostic_scores(test_meta,test_gsva,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
+test_result <- find_cellEnrichedPrognostic_scores(test_meta,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
+
+alt_gmts <- test_gmts
+alt_gmts[[str_replace(test_result$final_progFeature,"GSVA_","")]] <- NULL
+alt_meta1 <- test_meta[test_meta[,test_result$final_progFeature] < test_result$final_progCutoff,]
+alt_result1 <- find_cellEnrichedPrognostic_scores(alt_meta1,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
+alt_meta2 <- test_meta[test_meta[,test_result$final_progFeature] >= test_result$final_progCutoff,]
+alt_result2 <- find_cellEnrichedPrognostic_scores(alt_meta2,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
+
+
+####
+
 
 
 ```
