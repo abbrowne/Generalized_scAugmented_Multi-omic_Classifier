@@ -604,7 +604,8 @@ check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
   }
 }
 
-find_cellEnrichedPrognostic_scores <- function(input_meta,
+find_cellEnrichedPrognostic_scores <- function(input_expression,
+                                               input_meta,
                                                input_outcome_time,
                                                input_outcome_result,
                                                input_sc_dataset,
@@ -621,6 +622,14 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
   
   
   temp_meta <- input_meta
+  
+  ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
+  cat(paste0("Running GSVA scoring on selected gene sets with included expression data.\n"))
+  temp_gsva <- gsva(gsvaParam(input_expression,input_gmts))
+  temp_gsva <- t(temp_gsva)[rownames(temp_meta),]
+  colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
+  temp_meta <- cbind(temp_meta,temp_gsva)
+  
   ##Create survival formula for assessing all included GSVA scores in relation to overall survival
   temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                     paste(paste0("GSVA_",names(input_gmts)),collapse = " + ")))
@@ -689,10 +698,10 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
               legend.title = paste0(temp_progFeature, " < ",round(temp_progCutoff,3)),
               legend.labs = levels(temp_meta$test_surv_group))
             temp_max_cell_type <- comp_result$max_cell_type
-            temp_meta$test_surv_group <- NULL
-            sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-            temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-                                              paste(sub_gsva_columns,collapse = " + ")))
+            #temp_meta$test_surv_group <- NULL
+            #sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+            #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+            #                                  paste(sub_gsva_columns,collapse = " + ")))
             break
           }
         }
@@ -702,13 +711,13 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
                                           paste(sub_gsva_columns,collapse = " + ")))
         total_iterations <- total_iterations + 1
       }
+      if(flag_primary_cutpoint_sc_enrichment == TRUE){
+        break
+      }
       temp_meta$test_surv_group <- NULL
       sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                         paste(sub_gsva_columns,collapse = " + ")))
-      if(flag_primary_cutpoint_sc_enrichment == TRUE){
-        break
-      }
     }
     temp_meta$test_surv_group <- NULL
     sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
@@ -763,18 +772,22 @@ find_cellEnrichedPrognostic_scores <- function(input_meta,
 ##Load metadata and GSVA scores and add them to metadata
 test_sc_dataset <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDatasets/pk_all.rds")
 
+input_expression_set <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_expression_set.RDS")
+test_expression <- input_expression_set$log2TPM
+
 test_outcome_time <- "Survival_OS_time"
 test_outcome_result <- "Survival_OS"
 
-test_gsva <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
-test_gsva <- test_gsva$GSVA$log2CPM
+#test_gsva <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
+#test_gsva <- test_gsva$GSVA$log2CPM
 
 test_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
-test_gsva <- t(test_gsva)[rownames(test_meta),]
-colnames(test_gsva) <- paste0("GSVA_",colnames(test_gsva))
-test_meta <- cbind(test_meta,test_gsva)
 ##Modified one entry with 0 for survival time that was causing an error
 test_meta$Survival_OS_time[test_meta$Survival_OS_time == 0] <- 1
+
+#test_gsva <- t(test_gsva)[rownames(test_meta),]
+#colnames(test_gsva) <- paste0("GSVA_",colnames(test_gsva))
+#test_meta <- cbind(test_meta,test_gsva)
 
 ##Load example GMTs relevant to TCGA PAAD
 hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
@@ -787,7 +800,7 @@ pdac_genesets$Moffitt.Top25s <- NULL
 all_gmts <- c(hp_gmt,pdac_genesets)
 test_gmts <- all_gmts
 
-test_result <- find_cellEnrichedPrognostic_scores(test_meta,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
+test_result <- find_cellEnrichedPrognostic_scores(test_expression,test_meta,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
 
 alt_gmts <- test_gmts
 alt_gmts[[str_replace(test_result$final_progFeature,"GSVA_","")]] <- NULL
