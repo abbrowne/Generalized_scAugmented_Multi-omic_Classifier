@@ -21,16 +21,15 @@ library(GSVA)
 library(qusage)
 library(org.Hs.eg.db)
 library(AnnotationDbi)
-library(survival)
 library(rpart)
 library(pdacR)
 library(Seurat)
-library(ggplot2)
 library(switchBox)
 library(ncvreg)
 library(stringr)
 library(survival)
 library(survminer)
+library(ggplot2)
 
 ```
 
@@ -679,9 +678,14 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
             #temp_survFit <- survfit(Surv(time = temp_meta[[input_outcome_time]],
             #                             event = temp_meta[[input_outcome_result]]) ~ test_surv_group,
             #                        data = temp_meta)
-            temp_survFit <- survfit(as.formula(paste0("Surv(", 
-                                                      input_outcome_time, ", ", input_outcome_result, 
-                                                      ") ~ test_surv_group")),data = temp_meta)
+            #temp_survPlot_formula <- as.formula(paste0("Surv(",input_outcome_time, ", ", input_outcome_result,") ~ test_surv_group"))
+            #environment(temp_survPlot_formula) <- environment()
+            #temp_survFit <- survfit(temp_survPlot_formula,data = temp_meta)
+            temp_survFit <- eval(bquote(
+                survfit(.(as.formula(
+                  paste0("Surv(", input_outcome_time, ", ", input_outcome_result, ") ~ test_surv_group")
+                )), data = .(temp_meta))
+              ))
             #print(levels(temp_meta$test_surv_group))
             #print(table(temp_meta$test_surv_group,temp_meta$Survival_OS))
             #print(all(c(input_outcome_time, input_outcome_result, "test_surv_group") %in% colnames(temp_meta)))
@@ -705,24 +709,24 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
             break
           }
         }
-        temp_meta$test_surv_group <- NULL
+        #temp_meta$test_surv_group <- NULL
         sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-        temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-                                          paste(sub_gsva_columns,collapse = " + ")))
+        #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+        #                                  paste(sub_gsva_columns,collapse = " + ")))
         total_iterations <- total_iterations + 1
       }
       if(flag_primary_cutpoint_sc_enrichment == TRUE){
         break
       }
-      temp_meta$test_surv_group <- NULL
+      #temp_meta$test_surv_group <- NULL
       sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-      temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-                                        paste(sub_gsva_columns,collapse = " + ")))
+      #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+      #                                  paste(sub_gsva_columns,collapse = " + ")))
     }
-    temp_meta$test_surv_group <- NULL
+    #temp_meta$test_surv_group <- NULL
     sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-    temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-                                      paste(sub_gsva_columns,collapse = " + ")))
+    #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+    #                                  paste(sub_gsva_columns,collapse = " + ")))
   }
   
   if(flag_primary_cutpoint_sc_enrichment == TRUE){
@@ -802,12 +806,12 @@ test_gmts <- all_gmts
 
 test_result <- find_cellEnrichedPrognostic_scores(test_expression,test_meta,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
 
-alt_gmts <- test_gmts
-alt_gmts[[str_replace(test_result$final_progFeature,"GSVA_","")]] <- NULL
-alt_meta1 <- test_meta[test_meta[,test_result$final_progFeature] < test_result$final_progCutoff,]
-alt_result1 <- find_cellEnrichedPrognostic_scores(alt_meta1,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
-alt_meta2 <- test_meta[test_meta[,test_result$final_progFeature] >= test_result$final_progCutoff,]
-alt_result2 <- find_cellEnrichedPrognostic_scores(alt_meta2,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
+#alt_gmts <- test_gmts
+#alt_gmts[[str_replace(test_result$final_progFeature,"GSVA_","")]] <- NULL
+#alt_meta1 <- test_meta[test_meta[,test_result$final_progFeature] < test_result$final_progCutoff,]
+#alt_result1 <- find_cellEnrichedPrognostic_scores(alt_meta1,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
+#alt_meta2 <- test_meta[test_meta[,test_result$final_progFeature] >= test_result$final_progCutoff,]
+#alt_result2 <- find_cellEnrichedPrognostic_scores(alt_meta2,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
 
 ###Next up: link scEnriched prognostic scores and groups with classifier derivation functions
 
