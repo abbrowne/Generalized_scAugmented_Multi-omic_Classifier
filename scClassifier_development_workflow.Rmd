@@ -402,6 +402,7 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   ##Derive recommended probability cutoff
   all_TSPs <- c(temp_TSPs$geneA,temp_TSPs$geneB)
   sub_expr <- input_expression[rownames(input_expression) %in% all_TSPs,]
+  temp_TSPs <- temp_TSPs[temp_TSPs$geneA %in% rownames(sub_expr) & temp_TSPs$geneB %in% rownames(sub_expr),]
   
   temp_resultMat <- list()
   for(temp_i in 1:nrow(temp_TSPs)){
@@ -609,14 +610,15 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
                                                input_outcome_result,
                                                input_sc_dataset,
                                                input_gmts,
-                                               max_iterations=20,
+                                               max_iterations=100,
                                                input_cp_set=c(0.05,0.02),
-                                               initial_minsplit_fraction=0.2,
-                                               initial_minbucket_fraction=0.1,
-                                               minsplit_multiple=0.5,
-                                               minbucket_multiple=0.5,
+                                               initial_minsplit_fraction=0.4,
+                                               initial_minbucket_fraction=0.4,
+                                               minsplit_delta=0.1,
+                                               minbucket_delta=0.1,
                                                max_prog_features_per_fit=5,
-                                               max_enrichment_iterations=10
+                                               max_enrichment_iterations=10,
+                                               plot_name="initial_survplot"
                                                ){
   
   
@@ -645,12 +647,14 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   sub_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
   cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
   while(flag_primary_cutpoint_sc_enrichment == FALSE & total_iterations <= max_iterations){
+    #cat(paste0("The total iterations are: ",total_iterations))
     if(total_iterations > 0){
-      temp_minsplit <- round(temp_minsplit * minsplit_multiple)
-      temp_minbucket <- round(temp_minbucket * minbucket_multiple)
+      temp_minsplit <- round(nrow(temp_meta)*(initial_minsplit_fraction - minsplit_delta))
+      temp_minbucket <- round(nrow(temp_meta)*(initial_minsplit_fraction - minbucket_delta))
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                           paste(sub_gsva_columns,collapse = " + ")))
     }
+    #cat(paste0("The minbucket is: ",temp_minbucket))
     for(temp_cp_i in 1:length(temp_cp_set)){
       temp_cp <- temp_cp_set[temp_cp_i]
       temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
@@ -658,62 +662,66 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
                                                  maxdepth=1,
                                                  minsplit = temp_minsplit,
                                                  minbucket = temp_minbucket))
-      
-      for(temp_prog_feature_i in 1:max_prog_features_per_fit){
-        temp_progFeature <- names(temp_fit$variable.importance)[temp_prog_feature_i]
-        temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
-        cat(paste0("Testing cp ",temp_cp," minsplit ",temp_minsplit," and minbucket ",temp_minbucket," with prog feature ",temp_prog_feature_i," : ",temp_progFeature,"\n"))
-        temp_meta$test_surv_group <- as.factor(temp_meta[,temp_progFeature] < temp_progCutoff)
-        temp_surv_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ test_surv_group"))
-        fit_cox <- coxph(temp_surv_formula, data = temp_meta)
-        temp_summary <- summary(fit_cox)
-        print(temp_summary)
-        temp_coxph_pval <- as.numeric(temp_summary$waldtest["pvalue"])
-        if(temp_coxph_pval < 0.05){
-          input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
-          comp_result <- check_sc_enrichment(input_sc_dataset,input_gmts,input_geneset_name)
-          if(sum(comp_result$max_module_score >= comp_result$other_module_scores*2) == length(comp_result$other_module_scores)){
-            flag_primary_cutpoint_sc_enrichment <- TRUE
-            #temp_meta$test_surv_group <- droplevels(temp_meta$test_surv_group)
-            #temp_survFit <- survfit(Surv(time = temp_meta[[input_outcome_time]],
-            #                             event = temp_meta[[input_outcome_result]]) ~ test_surv_group,
-            #                        data = temp_meta)
-            #temp_survPlot_formula <- as.formula(paste0("Surv(",input_outcome_time, ", ", input_outcome_result,") ~ test_surv_group"))
-            #environment(temp_survPlot_formula) <- environment()
-            #temp_survFit <- survfit(temp_survPlot_formula,data = temp_meta)
-            temp_survFit <- eval(bquote(
-                survfit(.(as.formula(
-                  paste0("Surv(", input_outcome_time, ", ", input_outcome_result, ") ~ test_surv_group")
-                )), data = .(temp_meta))
-              ))
-            #print(levels(temp_meta$test_surv_group))
-            #print(table(temp_meta$test_surv_group,temp_meta$Survival_OS))
-            #print(all(c(input_outcome_time, input_outcome_result, "test_surv_group") %in% colnames(temp_meta)))
-            #print(nrow(temp_meta))
-            #print(sum(complete.cases(temp_meta[, c(input_outcome_time, input_outcome_result, "test_surv_group")])))
-            #print(summary(temp_survFit))
-            #print(temp_survFit$strata)
-            temp_best_surv_plot <- ggsurvplot(temp_survFit, data = temp_meta,
-              pval = TRUE,            # adds p-value for log-rank test
-              conf.int = TRUE,        # adds confidence intervals
-              risk.table = TRUE,      # add risk table at the bottom
-              xlab = "Time",
-              ylab = "Survival Probability",
-              legend.title = paste0(temp_progFeature, " < ",round(temp_progCutoff,3)),
-              legend.labs = levels(temp_meta$test_surv_group))
-            temp_max_cell_type <- comp_result$max_cell_type
-            #temp_meta$test_surv_group <- NULL
-            #sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-            #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-            #                                  paste(sub_gsva_columns,collapse = " + ")))
-            break
+      if(length(names(temp_fit$variable.importance)) > 0){
+        for(temp_prog_feature_i in 1:min(max_prog_features_per_fit,length(names(temp_fit$variable.importance)))){
+          temp_progFeature <- names(temp_fit$variable.importance)[temp_prog_feature_i]
+          temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
+          cat(paste0("Testing cp ",temp_cp," minsplit ",temp_minsplit," and minbucket ",temp_minbucket," with prog feature ",temp_prog_feature_i," : ",temp_progFeature,"\n"))
+          temp_meta$test_surv_group <- as.factor(temp_meta[,temp_progFeature] < temp_progCutoff)
+          temp_surv_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ test_surv_group"))
+          fit_cox <- coxph(temp_surv_formula, data = temp_meta)
+          temp_summary <- summary(fit_cox)
+          print(temp_summary)
+          temp_coxph_pval <- as.numeric(temp_summary$waldtest["pvalue"])
+          if(temp_coxph_pval < 0.05){
+            input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
+            comp_result <- check_sc_enrichment(input_sc_dataset,input_gmts,input_geneset_name)
+            if(sum(comp_result$max_module_score >= comp_result$other_module_scores*2) == length(comp_result$other_module_scores)){
+              flag_primary_cutpoint_sc_enrichment <- TRUE
+              #temp_meta$test_surv_group <- droplevels(temp_meta$test_surv_group)
+              #temp_survFit <- survfit(Surv(time = temp_meta[[input_outcome_time]],
+              #                             event = temp_meta[[input_outcome_result]]) ~ test_surv_group,
+              #                        data = temp_meta)
+              #temp_survPlot_formula <- as.formula(paste0("Surv(",input_outcome_time, ", ", input_outcome_result,") ~ test_surv_group"))
+              #environment(temp_survPlot_formula) <- environment()
+              #temp_survFit <- survfit(temp_survPlot_formula,data = temp_meta)
+              temp_survFit <- eval(bquote(
+                  survfit(.(as.formula(
+                    paste0("Surv(", input_outcome_time, ", ", input_outcome_result, ") ~ test_surv_group")
+                  )), data = .(temp_meta))
+                ))
+              #print(levels(temp_meta$test_surv_group))
+              #print(table(temp_meta$test_surv_group,temp_meta$Survival_OS))
+              #print(all(c(input_outcome_time, input_outcome_result, "test_surv_group") %in% colnames(temp_meta)))
+              #print(nrow(temp_meta))
+              #print(sum(complete.cases(temp_meta[, c(input_outcome_time, input_outcome_result, "test_surv_group")])))
+              #print(summary(temp_survFit))
+              #print(temp_survFit$strata)
+              temp_best_surv_plot <- ggsurvplot(temp_survFit, data = temp_meta,
+                pval = TRUE,            # adds p-value for log-rank test
+                conf.int = TRUE,        # adds confidence intervals
+                risk.table = TRUE,      # add risk table at the bottom
+                xlab = "Time",
+                ylab = "Survival Probability",
+                legend.title = paste0(temp_progFeature, " < ",round(temp_progCutoff,3)),
+                legend.labs = levels(temp_meta$test_surv_group))
+              pdf(paste0("E:/Projects/BioApp_1/Example_data/TCGA_PAAD/",plot_name,".pdf"))
+              print(temp_best_surv_plot)
+              dev.off()
+              temp_max_cell_type <- comp_result$max_cell_type
+              #temp_meta$test_surv_group <- NULL
+              #sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+              #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+              #                                  paste(sub_gsva_columns,collapse = " + ")))
+              break
+            }
           }
+          #temp_meta$test_surv_group <- NULL
+          sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
+          #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+          #                                  paste(sub_gsva_columns,collapse = " + ")))
+          total_iterations <- total_iterations + 1
         }
-        #temp_meta$test_surv_group <- NULL
-        sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-        #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-        #                                  paste(sub_gsva_columns,collapse = " + ")))
-        total_iterations <- total_iterations + 1
       }
       if(flag_primary_cutpoint_sc_enrichment == TRUE){
         break
@@ -757,14 +765,16 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
       cat(paste0("Failed to identify sufficient numbers of enriched markers for the cell type associating with the identified prognostic feature.\n",
                  "The best obtained marker list will be returned despite being outside the optimal range of approximately 500-1000 genes.\n"))
     }
-    final_prog_info <- list(final_progFeature=temp_progFeature,
+    final_prog_info <- list(final_meta=temp_meta,
+                            final_progFeature=temp_progFeature,
                             final_progCutoff=temp_progCutoff,
-                            final_survPlot=temp_best_surv_plot,
+                            final_progGroup=as.factor(as.numeric(temp_meta[,temp_progFeature] < temp_progCutoff)),
+                            #final_survPlot=temp_best_surv_plot,
                             final_cp=temp_cp,
                             final_minsplit=temp_minsplit,
                             final_minbucket=temp_minbucket,
                             final_enriched_cellType=temp_max_cell_type,
-                            final_scMarkers=temp_scMarkers,
+                            final_scMarkers=rownames(temp_scMarkers),
                             final_scMarker_enrichment_threshold=temp_thresholdFC)
     return(final_prog_info)
   }else{
@@ -805,6 +815,7 @@ all_gmts <- c(hp_gmt,pdac_genesets)
 test_gmts <- all_gmts
 
 test_result <- find_cellEnrichedPrognostic_scores(test_expression,test_meta,test_outcome_time,test_outcome_result,test_sc_dataset,test_gmts)
+saveRDS(test_result,file="E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_cellEnrichedPrognostic_score_results.RDS")
 
 #alt_gmts <- test_gmts
 #alt_gmts[[str_replace(test_result$final_progFeature,"GSVA_","")]] <- NULL
@@ -814,8 +825,116 @@ test_result <- find_cellEnrichedPrognostic_scores(test_expression,test_meta,test
 #alt_result2 <- find_cellEnrichedPrognostic_scores(alt_meta2,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
 
 ###Next up: link scEnriched prognostic scores and groups with classifier derivation functions
+test_result <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_exploratory_cellEnrichedPrognostic_score_results.RDS")
 
-####
+#temp_meta <- test_result$final_meta
+#temp_meta$test_progGroup <- as.factor(as.numeric(temp_meta[,test_result$final_progFeature] < test_result$final_progCutoff))
+
+test_classifier_result <- create_ncvTSP_classifier(test_expression, test_result$final_progGroup, test_result$final_scMarkers)
+
+test_classifier_calls <- apply_TSP_classifier(test_expression,test_classifier_result)
+
+##Check results
+table(test_classifier_calls$group,test_result$final_progGroup)
+
+test_result$final_meta$test_surv_group <- test_result$final_progGroup
+
+# Create the Surv object
+surv_object <- Surv(time = test_result$final_meta[,test_outcome_time], event = test_result$final_meta[,test_outcome_result])
+                    
+# Kaplan-Meier fit by 'group'
+fit1 <- survfit(surv_object ~ test_surv_group, data = test_result$final_meta)
+
+# Use ggsurvplot for a survival curve of both classifier groups
+temp_plot1 <- ggsurvplot(fit1, 
+                         data = test_result$final_meta,
+                         pval = TRUE,            # adds p-value for log-rank test
+                         conf.int = TRUE,        # adds confidence intervals
+                         risk.table = TRUE,      # add risk table at the bottom
+                         xlab = "Time",
+                         ylab = "Survival Probability",
+                         legend.title = "Group",
+                         legend.labs = levels(test_result$final_meta$test_surv_group),
+                         title = "Overall survival with scClassifier groups")
+
+print(temp_plot1)
+
+##Try iterating on subgroups from first classifier
+
+sub_result1 <- find_cellEnrichedPrognostic_scores(test_expression[,test_classifier_calls$group == 1],
+                                                  test_result$final_meta[test_classifier_calls$group == 1,!grepl("GSVA_",colnames(test_result$final_meta))],
+                                                  test_outcome_time,
+                                                  test_outcome_result,
+                                                  test_sc_dataset,
+                                                  test_gmts)
+sub_classifier_result1 <- create_ncvTSP_classifier(test_expression[,test_classifier_calls$group == 1], 
+                                                   sub_result1$final_progGroup, 
+                                                   sub_result1$final_scMarkers)
+
+sub_classifier_calls1 <- apply_TSP_classifier(test_expression[,test_classifier_calls$group == 1],
+                                              sub_classifier_result1)
+
+sub_result1$final_meta$test_surv_group <- sub_result1$final_progGroup
+
+# Create the Surv object
+surv_object1 <- Surv(time = sub_result1$final_meta[,test_outcome_time], event = sub_result1$final_meta[,test_outcome_result])
+                    
+# Kaplan-Meier fit by 'group'
+sub_fit1 <- survfit(surv_object1 ~ test_surv_group, data = sub_result1$final_meta)
+
+# Use ggsurvplot for a survival curve of both classifier groups
+sub_plot1 <- ggsurvplot(sub_fit1, 
+                         data = sub_result1$final_meta,
+                         pval = TRUE,            # adds p-value for log-rank test
+                         conf.int = TRUE,        # adds confidence intervals
+                         risk.table = TRUE,      # add risk table at the bottom
+                         xlab = "Time",
+                         ylab = "Survival Probability",
+                         legend.title = "Group",
+                         legend.labs = levels(sub_result1$final_meta$test_surv_group),
+                         title = "Overall survival with scClassifier groups")
+
+print(sub_plot1)
+
+##
+
+sub_result0 <- find_cellEnrichedPrognostic_scores(test_expression[,test_classifier_calls$group == 0],
+                                                  test_result$final_meta[test_classifier_calls$group == 0,!grepl("GSVA_",colnames(test_result$final_meta))],
+                                                  test_outcome_time,
+                                                  test_outcome_result,
+                                                  test_sc_dataset,
+                                                  test_gmts)
+sub_classifier_result0 <- create_ncvTSP_classifier(test_expression[,test_classifier_calls$group == 0], 
+                                                   sub_result0$final_progGroup, 
+                                                   sub_result0$final_scMarkers)
+
+sub_classifier_calls0 <- apply_TSP_classifier(test_expression[,test_classifier_calls$group == 0],
+                                              sub_classifier_result0)
+
+sub_result0$final_meta$test_surv_group <- sub_result0$final_progGroup
+
+# Create the Surv object
+surv_object0 <- Surv(time = sub_result0$final_meta[,test_outcome_time], event = sub_result0$final_meta[,test_outcome_result])
+                    
+# Kaplan-Meier fit by 'group'
+sub_fit0 <- survfit(surv_object0 ~ test_surv_group, data = sub_result0$final_meta)
+
+# Use ggsurvplot for a survival curve of both classifier groups
+sub_plot0 <- ggsurvplot(sub_fit0, 
+                         data = sub_result0$final_meta,
+                         pval = TRUE,            # adds p-value for log-rank test
+                         conf.int = TRUE,        # adds confidence intervals
+                         risk.table = TRUE,      # add risk table at the bottom
+                         xlab = "Time",
+                         ylab = "Survival Probability",
+                         legend.title = "Group",
+                         legend.labs = levels(sub_result1$final_meta$test_surv_group),
+                         title = "Overall survival with scClassifier groups")
+
+print(sub_plot0)
+
+
+####Next up: explore classifier genes with RummaGEO
 
 
 
@@ -878,6 +997,60 @@ test_rummageo_result$geneset_id <- parsed_response$data$geneSetTermSearch$edges$
 test_rummageo_result$geneset_term <- parsed_response$data$geneSetTermSearch$edges$node$term
 ##Genes by geneset
 test_rummageo_result$geneset_genes <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$genes$nodes
+
+
+test_geneset <- c(test_classifier_result$TSPs$geneA,test_classifier_result$TSPs$geneB)
+
+##
+
+qry <- Query$new()
+
+test_query <- "ipsc neuro"
+
+# Define your GraphQL query
+# Here is a simple example retrieving a "name" field from a "me" object
+my_query <- paste0('query MyQuery {
+  geneSetTermSearch(terms: "',test_query,'") {
+    edges {
+      node {
+        title
+        term
+        geneSetById {
+          id
+          genes {
+            nodes {
+              symbol
+            }
+          }
+        }
+      }
+    }
+  }
+}
+')
+
+# Add the query to the Query object
+qry$query('GetName', my_query)
+
+# Execute the query
+response <- client$exec(qry$queries$GetName)
+
+# Parse the JSON response
+parsed_response <- fromJSON(response)
+
+# View the results
+#head(parsed_response)
+
+test_rummageo_result <- list(geneset_id=list(),geneset_title=list(),geneset_term=list(),geneset_genes=list())
+##Geneset titles
+test_rummageo_result$geneset_title <- parsed_response$data$geneSetTermSearch$edges$node$title
+##Geneset ids
+test_rummageo_result$geneset_id <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$id
+##Geneset terms
+test_rummageo_result$geneset_term <- parsed_response$data$geneSetTermSearch$edges$node$term
+##Genes by geneset
+test_rummageo_result$geneset_genes <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$genes$nodes
+
 
 
 ```
