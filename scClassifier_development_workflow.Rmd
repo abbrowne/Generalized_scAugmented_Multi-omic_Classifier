@@ -809,9 +809,71 @@ alt_result1 <- find_cellEnrichedPrognostic_scores(alt_meta1,test_outcome_time,te
 alt_meta2 <- test_meta[test_meta[,test_result$final_progFeature] >= test_result$final_progCutoff,]
 alt_result2 <- find_cellEnrichedPrognostic_scores(alt_meta2,test_outcome_time,test_outcome_result,test_sc_dataset,alt_gmts)
 
+###Next up: link scEnriched prognostic scores and groups with classifier derivation functions
 
 ####
 
+
+
+```
+
+```{r explore GraphQL endpoint queries for utilization of RummaGEO}
+
+library(ghql)
+library(jsonlite)
+
+
+client <- GraphqlClient$new(
+    url = "https://rummageo.com/graphql"
+)
+
+qry <- Query$new()
+
+test_query <- "ipsc neuro"
+
+# Define your GraphQL query
+# Here is a simple example retrieving a "name" field from a "me" object
+my_query <- paste0('query MyQuery {
+  geneSetTermSearch(terms: "',test_query,'") {
+    edges {
+      node {
+        title
+        term
+        geneSetById {
+          id
+          genes {
+            nodes {
+              symbol
+            }
+          }
+        }
+      }
+    }
+  }
+}
+')
+
+# Add the query to the Query object
+qry$query('GetName', my_query)
+
+# Execute the query
+response <- client$exec(qry$queries$GetName)
+
+# Parse the JSON response
+parsed_response <- fromJSON(response)
+
+# View the results
+#head(parsed_response)
+
+test_rummageo_result <- list(geneset_id=list(),geneset_title=list(),geneset_term=list(),geneset_genes=list())
+##Geneset titles
+test_rummageo_result$geneset_title <- parsed_response$data$geneSetTermSearch$edges$node$title
+##Geneset ids
+test_rummageo_result$geneset_id <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$id
+##Geneset terms
+test_rummageo_result$geneset_term <- parsed_response$data$geneSetTermSearch$edges$node$term
+##Genes by geneset
+test_rummageo_result$geneset_genes <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$genes$nodes
 
 
 ```
