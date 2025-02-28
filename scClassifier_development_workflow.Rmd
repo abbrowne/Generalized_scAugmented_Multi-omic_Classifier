@@ -257,7 +257,7 @@ input_scData <- readRDS("E:/Projects/Cancer/PDAC Chijimatsu reconstruction/scDat
 ##Load top gene sets from survival cutpoint analysis
 my_gene_set1 <- all_gmts$Moffitt.F6_BasalLike.top100
 my_gene_set2 <- all_gmts$CIBERSORT.Neutrophils
-gene_set_list <- list("Moffitt_F6_BasalLike_top100" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
+gene_set_list <- list("GSVA_Moffitt.F6_BasalLike.top250" = my_gene_set1,"CIBERSORT_Neutrophils" = my_gene_set2)
 
 ##Evaluate the top prognostic gene sets for their enrichment in a specific cell type in the PDAC scRNAseq atlas
 seurat_obj <- input_scData
@@ -635,7 +635,6 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                     paste(paste0("GSVA_",names(input_gmts)),collapse = " + ")))
   
-  #temp_cp <- 0.05
   temp_minsplit <- round(nrow(temp_meta)*initial_minsplit_fraction)
   temp_minbucket <- round(nrow(temp_meta)*initial_minbucket_fraction)
   temp_cp_set <- input_cp_set
@@ -647,14 +646,12 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   sub_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
   cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
   while(flag_primary_cutpoint_sc_enrichment == FALSE & total_iterations <= max_iterations){
-    #cat(paste0("The total iterations are: ",total_iterations))
     if(total_iterations > 0){
       temp_minsplit <- round(nrow(temp_meta)*(initial_minsplit_fraction - minsplit_delta))
       temp_minbucket <- round(nrow(temp_meta)*(initial_minsplit_fraction - minbucket_delta))
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                           paste(sub_gsva_columns,collapse = " + ")))
     }
-    #cat(paste0("The minbucket is: ",temp_minbucket))
     for(temp_cp_i in 1:length(temp_cp_set)){
       temp_cp <- temp_cp_set[temp_cp_i]
       temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
@@ -678,25 +675,11 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
             comp_result <- check_sc_enrichment(input_sc_dataset,input_gmts,input_geneset_name)
             if(sum(comp_result$max_module_score >= comp_result$other_module_scores*2) == length(comp_result$other_module_scores)){
               flag_primary_cutpoint_sc_enrichment <- TRUE
-              #temp_meta$test_surv_group <- droplevels(temp_meta$test_surv_group)
-              #temp_survFit <- survfit(Surv(time = temp_meta[[input_outcome_time]],
-              #                             event = temp_meta[[input_outcome_result]]) ~ test_surv_group,
-              #                        data = temp_meta)
-              #temp_survPlot_formula <- as.formula(paste0("Surv(",input_outcome_time, ", ", input_outcome_result,") ~ test_surv_group"))
-              #environment(temp_survPlot_formula) <- environment()
-              #temp_survFit <- survfit(temp_survPlot_formula,data = temp_meta)
               temp_survFit <- eval(bquote(
                   survfit(.(as.formula(
                     paste0("Surv(", input_outcome_time, ", ", input_outcome_result, ") ~ test_surv_group")
                   )), data = .(temp_meta))
                 ))
-              #print(levels(temp_meta$test_surv_group))
-              #print(table(temp_meta$test_surv_group,temp_meta$Survival_OS))
-              #print(all(c(input_outcome_time, input_outcome_result, "test_surv_group") %in% colnames(temp_meta)))
-              #print(nrow(temp_meta))
-              #print(sum(complete.cases(temp_meta[, c(input_outcome_time, input_outcome_result, "test_surv_group")])))
-              #print(summary(temp_survFit))
-              #print(temp_survFit$strata)
               temp_best_surv_plot <- ggsurvplot(temp_survFit, data = temp_meta,
                 pval = TRUE,            # adds p-value for log-rank test
                 conf.int = TRUE,        # adds confidence intervals
@@ -709,32 +692,19 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
               print(temp_best_surv_plot)
               dev.off()
               temp_max_cell_type <- comp_result$max_cell_type
-              #temp_meta$test_surv_group <- NULL
-              #sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-              #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-              #                                  paste(sub_gsva_columns,collapse = " + ")))
               break
             }
           }
-          #temp_meta$test_surv_group <- NULL
           sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-          #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-          #                                  paste(sub_gsva_columns,collapse = " + ")))
           total_iterations <- total_iterations + 1
         }
       }
       if(flag_primary_cutpoint_sc_enrichment == TRUE){
         break
       }
-      #temp_meta$test_surv_group <- NULL
       sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-      #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-      #                                  paste(sub_gsva_columns,collapse = " + ")))
     }
-    #temp_meta$test_surv_group <- NULL
     sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
-    #temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
-    #                                  paste(sub_gsva_columns,collapse = " + ")))
   }
   
   if(flag_primary_cutpoint_sc_enrichment == TRUE){
@@ -792,16 +762,10 @@ test_expression <- input_expression_set$log2TPM
 test_outcome_time <- "Survival_OS_time"
 test_outcome_result <- "Survival_OS"
 
-#test_gsva <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_gsva_set.RDS")
-#test_gsva <- test_gsva$GSVA$log2CPM
-
 test_meta <- readRDS("E:/Projects/Example_data/TCGA_PAAD/TCGA_PAAD_primary_meta.RDS")
+
 ##Modified one entry with 0 for survival time that was causing an error
 test_meta$Survival_OS_time[test_meta$Survival_OS_time == 0] <- 1
-
-#test_gsva <- t(test_gsva)[rownames(test_meta),]
-#colnames(test_gsva) <- paste0("GSVA_",colnames(test_gsva))
-#test_meta <- cbind(test_meta,test_gsva)
 
 ##Load example GMTs relevant to TCGA PAAD
 hp_gmt <- qusage::read.gmt("E:/Projects/Example_data/genesets/h.all.v2024.1.Hs.symbols.gmt")
@@ -934,6 +898,63 @@ sub_plot0 <- ggsurvplot(sub_fit0,
 print(sub_plot0)
 
 
+##Test classifier with a different PDAC dataset
+human_projects <- available_projects()
+
+tcga_paad_info = subset(
+    human_projects,
+    project == "PAAD" & file_source == "tcga" & project_type == "data_sources"
+)
+
+proj_info <- map(seq(nrow(tcga_paad_info)), ~tcga_paad_info[.x, ])
+
+## create the RangedSummarizedExperiment. the create_rse function works on one row a time 
+
+rse_tcga_paad <- map(proj_info, ~create_rse(.x))
+
+#### Creating TPM from counts and transcript length
+count2tpm<- function(rse){
+    count_matrix <- rse@assays@data$raw_counts
+    gene_length <- rse@rowRanges$bp_length
+    reads_per_rpk <- count_matrix/gene_length
+    per_mil_scale <- colSums(reads_per_rpk)/1000000
+    tpm_matrix <- t(t(reads_per_rpk)/per_mil_scale)
+    return(tpm_matrix)
+}
+
+getCountMatrix<- function(rse){
+    count_matrix <- rse@assays@data$raw_counts
+    return(count_matrix)
+}
+
+## convert raw count matrix per cancer type to TPM and subset to only the genes of interest 
+tpm_data<- map(rse_tcga_paad, count2tpm)
+count_data <- map(rse_tcga_paad, getCountMatrix)
+
+## get the metadata column 
+metadata<- map(rse_tcga_paad, ~.x@colData@listData %>% as.data.frame())
+
+# bind the data matrix across cancer types together 
+tpm_data2<- purrr::reduce(tpm_data, cbind)
+count_data2 <- purrr::reduce(count_data,cbind)
+
+## bind the metadata across cancer types together
+metadata2<- purrr::reduce(metadata, rbind)
+
+##Ensure idential ID naming across datasets and save them
+rownames(metadata2) <- metadata2$tcga.gdc_cases.samples.submitter_id
+colnames(count_data2) <- rownames(metadata2)
+colnames(tpm_data2) <- rownames(metadata2)
+
+dim(tpm_data2)
+dim(count_data2)
+dim(metadata2)
+
+tpm_data2[1:5,1:5]
+count_data2[1:5,1:5]
+metadata2[1:5,1:5]
+
+
 ####Next up: explore classifier genes with RummaGEO
 
 
@@ -1042,12 +1063,16 @@ parsed_response <- fromJSON(response)
 #head(parsed_response)
 
 test_rummageo_result <- list(geneset_id=list(),geneset_title=list(),geneset_term=list(),geneset_genes=list())
+
 ##Geneset titles
 test_rummageo_result$geneset_title <- parsed_response$data$geneSetTermSearch$edges$node$title
+
 ##Geneset ids
 test_rummageo_result$geneset_id <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$id
+
 ##Geneset terms
 test_rummageo_result$geneset_term <- parsed_response$data$geneSetTermSearch$edges$node$term
+
 ##Genes by geneset
 test_rummageo_result$geneset_genes <- parsed_response$data$geneSetTermSearch$edges$node$geneSetById$genes$nodes
 
