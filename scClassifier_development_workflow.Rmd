@@ -801,7 +801,7 @@ test_classifier_calls <- apply_TSP_classifier(test_expression,test_classifier_re
 ##Check results
 table(test_classifier_calls$group,test_result$final_progGroup)
 
-test_result$final_meta$test_surv_group <- test_result$final_progGroup
+test_result$final_meta$test_surv_group <- test_classifier_calls$group
 
 # Create the Surv object
 surv_object <- Surv(time = test_result$final_meta[,test_outcome_time], event = test_result$final_meta[,test_outcome_result])
@@ -838,7 +838,7 @@ sub_classifier_result1 <- create_ncvTSP_classifier(test_expression[,test_classif
 sub_classifier_calls1 <- apply_TSP_classifier(test_expression[,test_classifier_calls$group == 1],
                                               sub_classifier_result1)
 
-sub_result1$final_meta$test_surv_group <- sub_result1$final_progGroup
+sub_result1$final_meta$test_surv_group <- sub_classifier_calls1$group
 
 # Create the Surv object
 surv_object1 <- Surv(time = sub_result1$final_meta[,test_outcome_time], event = sub_result1$final_meta[,test_outcome_result])
