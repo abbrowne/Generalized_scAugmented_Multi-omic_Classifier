@@ -51,7 +51,11 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
 ){
   
   
-  temp_meta <- input_meta
+  if(sum(input_meta[,input_outcome_time] <= 0) > 0){
+    print(paste0("Error with survival times of 0 or below. These samples will be removed"))
+  }
+  temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
+  
   
   ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
   cat(paste0("Running GSVA scoring on selected gene sets with included expression data.\n"))
@@ -72,16 +76,21 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   total_iterations <- 0
   temp_progFeature <- NULL
   temp_progCutoff <- NULL
-  sub_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
+  filtered_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
+  sub_gsva_columns <- filtered_gsva_columns
   cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
   while(flag_primary_cutpoint_sc_enrichment == FALSE & total_iterations <= max_iterations){
     if(total_iterations > 0){
+      sub_gsva_columns <- filtered_gsva_columns
       temp_minsplit <- round(nrow(temp_meta)*(initial_minsplit_fraction - minsplit_delta))
       temp_minbucket <- round(nrow(temp_meta)*(initial_minsplit_fraction - minbucket_delta))
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                         paste(sub_gsva_columns,collapse = " + ")))
     }
     for(temp_cp_i in 1:length(temp_cp_set)){
+      sub_gsva_columns <- filtered_gsva_columns
+      temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
+                                        paste(sub_gsva_columns,collapse = " + ")))
       temp_cp <- temp_cp_set[temp_cp_i]
       temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
                         control = rpart.control(cp=temp_cp,
@@ -122,6 +131,9 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
               dev.off()
               temp_max_cell_type <- comp_result$max_cell_type
               break
+            }else{
+              ##Add code here to remove genesets that fail to show cellular enrichment from future iterations
+              filtered_gsva_columns <- filtered_gsva_columns[filtered_gsva_columns != temp_progFeature]
             }
           }
           sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
@@ -182,8 +194,11 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   }
 }
 
-create_ncvTSP_classifier <- function(input_expression, input_group, input_scMarkers){
+create_ncvTSP_classifier <- function(input_expression, input_group, input_scMarkers, input_meta=NULL){
   temp_expr <- input_expression[rownames(input_expression) %in% input_scMarkers,]
+  if(!is.null(input_meta)){
+    temp_expr <- t(t(temp_expr)[rownames(input_meta),])
+  }
   
   temp_TSP_result <- SWAP.KTSP.Train(temp_expr,as.factor(input_group),krange = 50,FilterFunc = NULL)
   
@@ -208,7 +223,7 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   
   ##Derive recommended probability cutoff
   all_TSPs <- c(temp_TSPs$geneA,temp_TSPs$geneB)
-  sub_expr <- input_expression[rownames(input_expression) %in% all_TSPs,]
+  sub_expr <- temp_expr[rownames(temp_expr) %in% all_TSPs,]
   temp_TSPs <- temp_TSPs[temp_TSPs$geneA %in% rownames(sub_expr) & temp_TSPs$geneB %in% rownames(sub_expr),]
   
   temp_resultMat <- list()
@@ -418,4 +433,28 @@ count2tpm<- function(rse){
 getCountMatrix<- function(rse){
   count_matrix <- rse@assays@data$raw_counts
   return(count_matrix)
+}
+
+importPDAC_genesets <- function(){
+  pdac_genesets <- pdacR::gene_lists
+  pdac_genesets$Moffitt.Tumor <- NULL
+  pdac_genesets$Puleo.Centroids <- NULL
+  pdac_genesets$ICGC.SAM <- NULL
+  pdac_genesets$Moffitt.Top5s <- NULL
+  pdac_genesets$Moffitt.Top25s <- NULL
+  return(pdac_genesets)
+}
+
+import_msigdb_genesets <- function(target_collection){
+  msig_h <- msigdbdf::msigdbdf(target_species = "HS")
+  
+  msig_h$gs_collection_name <- paste0(msig_h$gs_collection,"_",msig_h$gs_name)
+  
+  sub_msig <- msig_h[msig_h$gs_collection == target_collection,]
+  msig_list <- sub_msig %>%
+    group_by(gs_collection_name) %>%
+    summarize(genes = list(unique(db_gene_symbol)))
+  names(msig_list$genes) <- msig_list$gs_collection_name
+  msig_list <- msig_list$genes
+  return(msig_list)
 }
