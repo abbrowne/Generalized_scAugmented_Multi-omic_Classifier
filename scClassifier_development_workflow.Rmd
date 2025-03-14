@@ -9,12 +9,12 @@ Try executing this chunk by clicking the *Run* button within the chunk or by pla
 
 ```{r environment setup}
 
+library(TCGAbiolinks)
+library(recount3)
 library(dplyr)
 library(tidyr)
-library(TCGAbiolinks)
 library(DT)
 library(purrr)
-library(recount3)
 library(DESeq2)
 library(edgeR)
 library(limma)

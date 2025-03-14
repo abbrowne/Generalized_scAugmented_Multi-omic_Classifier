@@ -354,11 +354,11 @@ pullDataFromRecount3 <- function(input_project_name, input_project_source){
 
 processRecount3Data_TCGA <- function(temp_result,filter_genes=FALSE){
   #Load expression and metadata files
-  input_counts <- test_data$counts
+  input_counts <- temp_result$counts
   input_counts <- input_counts[,order(colnames(input_counts))]
-  input_tpm <- test_data$tpms
+  input_tpm <- temp_result$tpms
   input_tpm <- input_tpm[,order(colnames(input_tpm))]
-  input_meta <- test_data$meta
+  input_meta <- temp_result$meta
   input_meta <- input_meta[order(rownames(input_meta)),]
   
   ##Filter non-expressed genes
