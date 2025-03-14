@@ -352,7 +352,7 @@ pullDataFromRecount3 <- function(input_project_name, input_project_source){
   }
 }
 
-processRecount3Data_TCGA <- function(temp_result,filter_genes=FALSE){
+processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
   #Load expression and metadata files
   input_counts <- temp_result$counts
   input_counts <- input_counts[,order(colnames(input_counts))]
@@ -411,6 +411,16 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=FALSE){
     gene_ids_clean,
     temp_rownames
   )
+  
+  ##Remove any remaining duplicate rows
+  if(sum(duplicated(rownames(input_counts))) > 0){
+    cat(paste0("The following gene names were detected as duplicated and only the first instance will be retained:\n",
+               paste0(unique(rownames(input_counts)[duplicated(rownames(input_counts))]),collapse = ", ")))
+    input_counts <- input_counts[!duplicated(rownames(input_counts)),]
+    input_tpm <- input_tpm[!duplicated(rownames(input_tpm)),]
+    input_meta <- input_meta[colnames(input_counts),]
+  }
+  
   rownames(input_tpm) <- rownames(input_counts)
   
   if(all(colnames(input_counts) %in% rownames(input_meta)) & all(colnames(input_counts) == rownames(input_meta))){
