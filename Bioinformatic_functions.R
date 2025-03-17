@@ -51,16 +51,20 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
 ){
   
   
-  if(is.data.frame(input_expression)){
-    temp_expression <- as.matrix(input_expression)
-  }
-  
   if(sum(input_meta[,input_outcome_time] <= 0) > 0){
     print(paste0("Error with survival times of 0 or below. These samples will be removed"))
     temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
   }
   
+  if(!is.data.frame(input_expression)){
+    input_expression <- as.data.frame(input_expression)
+  }
   temp_expression <- t(t(input_expression)[rownames(temp_meta),])
+  
+  
+  if(is.data.frame(input_expression)){
+    temp_expression <- as.matrix(input_expression)
+  }
   
   ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
   cat(paste0("Running GSVA scoring on selected gene sets with included expression data.\n"))
