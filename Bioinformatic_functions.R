@@ -51,16 +51,22 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
 ){
   
   
+  if(is.data.frame(input_expression)){
+    temp_expression <- as.matrix(input_expression)
+  }
+  
   if(sum(input_meta[,input_outcome_time] <= 0) > 0){
     print(paste0("Error with survival times of 0 or below. These samples will be removed"))
+    temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
   }
-  temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
   
+  temp_expression <- t(t(input_expression)[rownames(temp_meta),])
   
   ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
   cat(paste0("Running GSVA scoring on selected gene sets with included expression data.\n"))
-  temp_gsva <- gsva(gsvaParam(input_expression,input_gmts))
-  temp_gsva <- t(temp_gsva)[rownames(temp_meta),]
+  temp_gsva <- gsva(gsvaParam(temp_expression,input_gmts))
+  temp_gsva <- t(temp_gsva)
+  rownames(temp_gsva) <- rownames(temp_meta)
   colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
   temp_meta <- cbind(temp_meta,temp_gsva)
   
@@ -467,4 +473,21 @@ import_msigdb_genesets <- function(target_collection){
   names(msig_list$genes) <- msig_list$gs_collection_name
   msig_list <- msig_list$genes
   return(msig_list)
+}
+
+custom_write.gmt <- function(genesets, file.name) {
+  if (file.exists(file.name)) { file.remove(file.name) }
+  genesets <- lapply(names(genesets), function(name) {x <- genesets[[name]]; x <- c(name,name,x); return(x);})
+  n.cols <- 1.5*max(unlist(lapply(genesets, length)))
+  invisible(lapply(genesets, write, file.name, append = T, ncolumns = n.cols, sep = '\t'))
+}
+
+custom_read.gmt <- function(file.name) {
+  geneset.to.use <- as.list(readLines(file.name))
+  geneset.to.use <- lapply(geneset.to.use, function (v) strsplit(v, '\t')[[1]])
+  geneset.names <- unlist(lapply(geneset.to.use, function(x) x[[1]]))
+  geneset.to.use <- lapply(geneset.to.use, function(v) v[3:length(v)])
+  names(geneset.to.use) <- geneset.names
+  names(geneset.to.use) <- sapply(names(geneset.to.use), function(x) gsub(" ", "_", x))
+  return(geneset.to.use)
 }
