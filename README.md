@@ -1,5 +1,5 @@
 
-*An example run of the classifier using TCGA PAAD data can be followed in the "test_classifier_script.R" file.*
+**An example run of the classifier using TCGA PAAD data can be followed in the "test_classifier_script.R" file.**
 
 
 ![image](https://github.com/user-attachments/assets/f36e2eca-9612-4514-a098-ce8f82e616c4)
