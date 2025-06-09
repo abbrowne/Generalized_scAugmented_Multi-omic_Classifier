@@ -1,4 +1,4 @@
-###Useful bioinformatic functions
+###Bioinformatic functions for prognostic and cell type enriched classifier development
 
 ##This function is designed to check for enrichment of a geneset across celltypes in a single cell dataset stored as a Seurat object
 ##The cell types should be indicated with a column named "Cell_type" in the seurat cell metadata
@@ -235,15 +235,18 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   }
 }
 
+##This function is designed to derive a classifier from the expression data for the provided binary group using the subset of genes in input_scMarkers (cell type markers)
 create_ncvTSP_classifier <- function(input_expression, input_group, input_scMarkers, input_meta=NULL){
+  #Expression data is subsetted to the genes in the input_scMarkers cell type marker list
   temp_expr <- input_expression[rownames(input_expression) %in% input_scMarkers,]
+  #The expression data is matched to the input metadata, if provided
   if(!is.null(input_meta)){
     temp_expr <- t(t(temp_expr)[rownames(input_meta),])
   }
-  
+  #Trains a binary K-TSP classifier that uses pairs of genes that can be used to classify the provided group
   temp_TSP_result <- SWAP.KTSP.Train(temp_expr,as.factor(input_group),krange = 50,FilterFunc = NULL)
   
-  ##Format gene pairs into binary matrix of comparisons for each sample to use in logistic regression
+  #Format gene pairs into binary matrix of comparisons for each sample to use in logistic regression
   temp_resultMat <- list()
   for(temp_i in 1:nrow(temp_TSP_result$TSPs)){
     temp_name <- paste0(temp_TSP_result$TSPs[temp_i,1],"_",temp_TSP_result$TSPs[temp_i,2])
@@ -251,11 +254,11 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   }
   temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
   
-  ##Perform logistic regression using top scoring pair result matrix and classification group to derive coefficients for each gene pair
+  #Perform logistic regression using top scoring pair result matrix and classification group to derive coefficients for each gene pair
   test_ncv_result <- cv.ncvreg(temp_resultMat,
                                input_group, 
                                alpha=0.5, nfolds = nrow(temp_resultMat))
-  
+  #Remove any rows with coefficient of 0 and store results as dataframe
   temp_coefs <- coef(test_ncv_result)
   temp_coefs <- temp_coefs[temp_coefs != 0]
   temp_TSPs <- as.data.frame(list(geneA=unlist(lapply(names(temp_coefs)[-1], function(x) strsplit(x, "_")[[1]][1])),
@@ -267,6 +270,7 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   sub_expr <- temp_expr[rownames(temp_expr) %in% all_TSPs,]
   temp_TSPs <- temp_TSPs[temp_TSPs$geneA %in% rownames(sub_expr) & temp_TSPs$geneB %in% rownames(sub_expr),]
   
+  #Apply derived classifier to the input expression
   temp_resultMat <- list()
   for(temp_i in 1:nrow(temp_TSPs)){
     temp_name <- paste0(temp_TSPs$geneA[temp_i],"_",temp_TSPs$geneB[temp_i])
@@ -274,7 +278,8 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
   }
   temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(sub_expr))
   
-  ### p = exp(x*coef) / (1 + exp(x*coef))
+  # p = exp(x*coef) / (1 + exp(x*coef))
+  #Calculate the scores for the results and test proposed cutoffs to identify the one with the least classification error
   temp_resultVector <- rowSums(t(t(temp_resultMat) * temp_TSPs$coef))
   temp_resultProb <- exp(temp_resultVector) / (1 + exp(temp_resultVector))
   all_cutoff_values <- seq(1,99)/100
@@ -283,6 +288,7 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
     temp_cutoff_value <- all_cutoff_values[temp_cutoff_i]
     temp_table <- table(input_group,temp_resultProb > temp_cutoff_value)
     if(nrow(temp_table) == 2 & ncol(temp_table) == 2){
+      #Errors for each iteration are calculated based on FP and TN outcomes in the prediction table
       temp_errors <- sum(temp_table[1,2] + temp_table[2,1])
       if(temp_errors < min_errors){
         min_errors <- temp_errors
@@ -293,18 +299,18 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
     }
   }
   
-  ##Return classifier
+  ##Return the classifier result with the proposed best score cutoff for accurate input group classification
   temp_TSP_classifier <- list(intercept=as.numeric(temp_coefs[1]),TSPs=temp_TSPs,best_cutoff_probs=best_cutoffs)
   return(temp_TSP_classifier)
 }
 
-
+##This function applies a classifier from the "create_ncvTSP_classifier" function to a new expression dataset
 apply_TSP_classifier <- function(input_expression, input_classifier, use_with_missing=FALSE, best_cutoff_probability=NULL,input_meta=NULL){
-  
+  #Subset expression data to samples in metadata, if included as an argument
   if(!is.null(input_meta)){
     input_expression <- t(t(input_expression)[rownames(input_meta),])
   }
-  
+  #Use best cutoff probability from classifier result unless provided
   if(is.null(best_cutoff_probability)){
     best_cutoff_probability <- input_classifier$best_cutoff_probs[1]
   }
@@ -316,7 +322,7 @@ apply_TSP_classifier <- function(input_expression, input_classifier, use_with_mi
                paste(missing_TSPs,collapse=", ")))
     cat(paste0("Full input dataset:\n"))
     print(input_classifier$TSPs)
-    
+    #Remove classifier pairs if use_with_missing argument is TRUE (not recommended)
     if(use_with_missing==TRUE){
       classifier_rows_to_drop <- c()
       for(temp_i in 1:nrow(input_classifier$TSPs)){
@@ -327,30 +333,31 @@ apply_TSP_classifier <- function(input_expression, input_classifier, use_with_mi
       }
       input_classifier <- input_classifier$TSPs[-classifier_rows_to_drop,]
     }else{
+      #Return error if all classifier genes are not found in the input expression data
       return(paste0("Error: Failed due to missing classifier genes in the input data"))
     }
   }
-  
+  #Subset expression to classifier genes
   all_TSPs <- c(input_classifier$TSPs$geneA,input_classifier$TSPs$geneB)
   temp_expr <- input_expression[rownames(input_expression) %in% all_TSPs,]
-  
+  #Derive classifier TSP comparisons and classifier scores for each sample
   temp_resultMat <- list()
   for(temp_i in 1:nrow(input_classifier$TSPs)){
     temp_name <- paste0(input_classifier$TSPs[temp_i,1],"_",input_classifier$TSPs[temp_i,2])
     temp_resultMat[[temp_name]] <- as.vector(as.integer(temp_expr[input_classifier$TSPs[temp_i,1],] > temp_expr[input_classifier$TSPs[temp_i,2],]))
   }
   temp_resultMat <- as.data.frame(temp_resultMat,row.names = colnames(temp_expr))
-  
-  ### p = exp(x*coef) / (1 + exp(x*coef))
   temp_resultVector <- rowSums(t(t(temp_resultMat) * input_classifier$TSPs$coef))
   temp_resultProb <- exp(temp_resultVector) / (1 + exp(temp_resultVector))
+  #Derive classifier label using best_cutoff_probability
   temp_resultGroup <- as.factor(as.numeric(temp_resultProb > best_cutoff_probability))
-  
+  #Return classifier result with probability and label for each sample
   temp_classifier_result <- as.data.frame(list(prob=temp_resultProb,group=temp_resultGroup))
   rownames(temp_classifier_result) <- colnames(input_expression)
   return(temp_classifier_result)
 }
 
+##This function converts an RNAseq count matrix from a recount3 RangedSummarizedExperiment object with gene_length included into a TPM matrix
 count2tpm<- function(rse){
   count_matrix <- rse@assays@data$raw_counts
   gene_length <- rse@rowRanges$bp_length
@@ -360,11 +367,13 @@ count2tpm<- function(rse){
   return(tpm_matrix)
 }
 
+##This function gets count data from a recount3 RangedSummarizedExperiment object
 getCountMatrix<- function(rse){
   count_matrix <- rse@assays@data$raw_counts
   return(count_matrix)
 }
 
+##This function pulls metadata, raw counts, and TPM data from recount for the indicated project name and source
 pullDataFromRecount3 <- function(input_project_name, input_project_source){
   
   human_projects <- available_projects()
@@ -397,8 +406,10 @@ pullDataFromRecount3 <- function(input_project_name, input_project_source){
   }
 }
 
+##This function processes TCGA data from recount3 to prepare it for downstream applications (e.g. classifier development).
+## The primary argument is the result from the "pullDataFromRecount3" function
 processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
-  #Load expression and metadata files
+  #Load expression and metadata files for the pullDataFromRecount3 result and order by sample names
   input_counts <- temp_result$counts
   input_counts <- input_counts[,order(colnames(input_counts))]
   input_tpm <- temp_result$tpms
@@ -406,14 +417,14 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
   input_meta <- temp_result$meta
   input_meta <- input_meta[order(rownames(input_meta)),]
   
-  ##Filter non-expressed genes
+  #Filter non-expressed genes from expression (can make more stringent if desired)
   if(filter_genes == TRUE){
     keep <- rowSums(input_counts > 0) > 0
     input_counts <- input_counts[keep,]
     input_tpm <- input_tpm[keep,]
   }
   
-  ##Load and add survival and sample phenotype data to metadata
+  #Load and add survival and sample phenotype data to metadata (these were previously downloaded from https://xenabrowser.net/datapages/)
   input_surv <- read.table("E:/Projects/Cancer/TCGA_PanCancer_Survival_SupplementalTable_S1_20171025_xena_sp",sep="\t",header=TRUE,row.names=1)
   colnames(input_surv) <- paste0("Outcomes_",colnames(input_surv))
   input_extra <- read.table("E:/Projects/Cancer/TCGA_PanCancer_phenotype_denseDataOnlyDownload.tsv",sep="\t",header=TRUE,row.names=1)
@@ -423,13 +434,15 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
            1,nchar(paste0(str_split(x,"-")[[1]][1:4],collapse = "-")) - 1)
   }))
   input_meta <- cbind(input_meta,input_surv[input_meta$Outcomes_matchingID,],input_extra[input_meta$Outcomes_matchingID,])
-  ##Reformat and factor primary sample type column used as covariate in modeling
+  
+  #Reformat and factor primary sample type column used as covariate in modeling
   input_meta$sample_type <- input_meta$SamplePhenotype_sample_type
   input_meta$sample_type[input_meta$sample_type == "Primary Tumor"] <- "Tumor"
   input_meta$sample_type[input_meta$sample_type == "Metastatic"] <- "Met"
   input_meta$sample_type[input_meta$sample_type == "Solid Tissue Normal"] <- "Normal"
   input_meta$sample_type <- factor(input_meta$sample_type,levels=c("Normal","Tumor","Met"))
-  ##Get HGNC symbols for remaining genes and replace ENSEMBL rownames
+  
+  #Get HGNC symbols for remaining genes and replace ENSEMBL rownames
   gene_ids <- rownames(input_counts)
   
   # Remove version suffix if present
@@ -445,7 +458,7 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
     multiVals = "first"       # If multiple symbols map to one ID, take the first
   )
   
-  ##Replace ensembl IDs with symbols if not NA and not duplicated
+  #Replace ensembl IDs with symbols if not NA and not duplicated, otherwise retain ensembl ID
   temp_rownames <- ifelse(
     is.na(symbol_map[gene_ids_clean]),
     gene_ids_clean,
@@ -457,7 +470,7 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
     temp_rownames
   )
   
-  ##Remove any remaining duplicate rows
+  #Remove any remaining duplicate rows from all objects after the ID conversion
   if(sum(duplicated(rownames(input_counts))) > 0){
     cat(paste0("The following gene names were detected as duplicated and only the first instance will be retained:\n",
                paste0(unique(rownames(input_counts)[duplicated(rownames(input_counts))]),collapse = ", ")))
@@ -465,9 +478,9 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
     input_tpm <- input_tpm[!duplicated(rownames(input_tpm)),]
     input_meta <- input_meta[colnames(input_counts),]
   }
-  
+  #Assign raw count rownames to the TPM data
   rownames(input_tpm) <- rownames(input_counts)
-  
+  #If all raw count and metadata sample names match, the formatted result is returned, otherwise an error is returned
   if(all(colnames(input_counts) %in% rownames(input_meta)) & all(colnames(input_counts) == rownames(input_meta))){
     input_project_dataset <- list(meta=input_meta,log2TPM=log2(input_tpm+1))
     return(input_project_dataset)
@@ -476,20 +489,7 @@ processRecount3Data_TCGA <- function(temp_result,filter_genes=TRUE){
   }
 }
 
-count2tpm<- function(rse){
-  count_matrix <- rse@assays@data$raw_counts
-  gene_length <- rse@rowRanges$bp_length
-  reads_per_rpk <- count_matrix/gene_length
-  per_mil_scale <- colSums(reads_per_rpk)/1000000
-  tpm_matrix <- t(t(reads_per_rpk)/per_mil_scale)
-  return(tpm_matrix)
-}
-
-getCountMatrix<- function(rse){
-  count_matrix <- rse@assays@data$raw_counts
-  return(count_matrix)
-}
-
+##This function imports genesets from the pdacR package and removes those with improper format
 importPDAC_genesets <- function(){
   pdac_genesets <- pdacR::gene_lists
   pdac_genesets$Moffitt.Tumor <- NULL
@@ -500,6 +500,7 @@ importPDAC_genesets <- function(){
   return(pdac_genesets)
 }
 
+##This function imports the selected geneset collection from msigdb
 import_msigdb_genesets <- function(target_collection){
   msig_h <- msigdbdf::msigdbdf(target_species = "HS")
   
@@ -514,6 +515,7 @@ import_msigdb_genesets <- function(target_collection){
   return(msig_list)
 }
 
+##This function writes a gmt list into a gmt file with one geneset per row, separated by tabs
 custom_write.gmt <- function(genesets, file.name) {
   if (file.exists(file.name)) { file.remove(file.name) }
   genesets <- lapply(names(genesets), function(name) {x <- genesets[[name]]; x <- c(name,name,x); return(x);})
@@ -521,6 +523,7 @@ custom_write.gmt <- function(genesets, file.name) {
   invisible(lapply(genesets, write, file.name, append = T, ncolumns = n.cols, sep = '\t'))
 }
 
+##This function reads a gmt file that is stored with one geneset per row, separated by tabs, into a list
 custom_read.gmt <- function(file.name) {
   geneset.to.use <- as.list(readLines(file.name))
   geneset.to.use <- lapply(geneset.to.use, function (v) strsplit(v, '\t')[[1]])
