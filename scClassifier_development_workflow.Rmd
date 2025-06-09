@@ -71,7 +71,33 @@ test_classifier_result <- create_ncvTSP_classifier(test_data2$log2TPM,
                                                    test_result$final_meta)
 
 test_classifier_calls <- apply_TSP_classifier(test_data2$log2TPM,
-                                              test_classifier_result)
+                                              test_classifier_result,
+                                              input_meta=test_result$final_meta)
+
+##Check results
+table(test_classifier_calls$group,test_result$final_progGroup)
+
+test_result$final_meta$test_surv_group <- test_classifier_calls$group
+
+# Create the Surv object
+surv_object <- Surv(time = test_result$final_meta[,test_outcome_time], event = test_result$final_meta[,test_outcome_result])
+
+# Kaplan-Meier fit by 'group'
+fit1 <- survfit(surv_object ~ test_surv_group, data = test_result$final_meta)
+
+# Use ggsurvplot for a survival curve of both classifier groups
+temp_plot1 <- ggsurvplot(fit1, 
+                         data = test_result$final_meta,
+                         pval = TRUE,            # adds p-value for log-rank test
+                         conf.int = TRUE,        # adds confidence intervals
+                         risk.table = TRUE,      # add risk table at the bottom
+                         xlab = "Time",
+                         ylab = "Survival Probability",
+                         legend.title = "Group",
+                         legend.labs = levels(test_result$final_meta$test_surv_group),
+                         title = "Overall survival with scClassifier groups")
+
+print(temp_plot1)
 
 ```
 
