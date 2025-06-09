@@ -1,7 +1,10 @@
 ###Useful bioinformatic functions
 
+##This function is designed to check for enrichment of a geneset across celltypes in a single cell dataset stored as a Seurat object
+##The cell types should be indicated with a column named "Cell_type" in the seurat cell metadata
 
 check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
+  #Seurat object is initialized and then the geneset from the argument is added as a module score
   seurat_obj <- NULL
   seurat_obj <- try(
     AddModuleScore(
@@ -12,20 +15,24 @@ check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
     silent = TRUE
   )
   if(!is.null(seurat_obj)){
+    #The mean module score is calculated for each Cell_type group
     temp_result <- as.data.frame(seurat_obj@meta.data %>% 
                                    group_by(Cell_type) %>% 
                                    summarize(mean_ModuleScore = mean(CustomGeneset1)))
+    #The module scores are normalized across cell types by subtracting the minimum score
     temp_min <- min(temp_result$mean_ModuleScore)
     temp_result$norm_Module_score <- temp_result$mean_ModuleScore - temp_min
     temp_max_i <- which.max(temp_result$norm_Module_score)
     temp_max_value <- temp_result$norm_Module_score[temp_max_i]
     temp_max_cell_type <- temp_result$Cell_type[temp_max_i]
     comp_result <- temp_result$norm_Module_score[temp_result$Cell_type != temp_max_cell_type]
+    #The max cell type and other scores are returned
     temp_result <- list("max_cell_type" = temp_max_cell_type,
                         "max_module_score" = temp_max_value,
                         "other_module_scores" = comp_result)
     return(temp_result)
   }else{
+    #Return NA result when a seurat obj is not provided
     temp_result <- list("max_cell_type" = NA,
                         "max_module_score" = 0,
                         "other_module_scores" = c(100,100))
@@ -54,6 +61,8 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   if(sum(input_meta[,input_outcome_time] <= 0) > 0){
     print(paste0("Error with survival times of 0 or below. These samples will be removed"))
     temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
+  }else{
+    temp_meta <- input_meta
   }
   
   if(!is.data.frame(input_expression)){
@@ -62,8 +71,8 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   temp_expression <- t(t(input_expression)[rownames(temp_meta),])
   
   
-  if(is.data.frame(input_expression)){
-    temp_expression <- as.matrix(input_expression)
+  if(is.data.frame(temp_expression)){
+    temp_expression <- as.matrix(temp_expression)
   }
   
   ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
@@ -268,7 +277,11 @@ create_ncvTSP_classifier <- function(input_expression, input_group, input_scMark
 }
 
 
-apply_TSP_classifier <- function(input_expression, input_classifier, use_with_missing=FALSE, best_cutoff_probability=NULL){
+apply_TSP_classifier <- function(input_expression, input_classifier, use_with_missing=FALSE, best_cutoff_probability=NULL,input_meta=NULL){
+  
+  if(!is.null(input_meta)){
+    input_expression <- t(t(input_expression)[rownames(input_meta),])
+  }
   
   if(is.null(best_cutoff_probability)){
     best_cutoff_probability <- input_classifier$best_cutoff_probs[1]
