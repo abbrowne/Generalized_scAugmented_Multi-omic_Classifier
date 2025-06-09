@@ -2,7 +2,6 @@
 
 ##This function is designed to check for enrichment of a geneset across celltypes in a single cell dataset stored as a Seurat object
 ##The cell types should be indicated with a column named "Cell_type" in the seurat cell metadata
-
 check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
   #Seurat object is initialized and then the geneset from the argument is added as a module score
   seurat_obj <- NULL
@@ -40,6 +39,12 @@ check_sc_enrichment <- function(input_sc_dataset,input_gmts,input_geneset_name){
   }
 }
 
+##This function is designed to check for features that show both significant prognostic association
+## and cell type enrichment. By providing expression data (ideally in TPM format), metadata with 
+## outcome variables, a reference single cell dataset in the same context, and a genesets associated
+## with the context and/or hypothesis of interest, this function will attempt to identify any 
+## genesets that meet both criteria and return the result including supplemental evaluation data.
+## The function will iterate through variables in the process that can be altered via arguments.
 find_cellEnrichedPrognostic_scores <- function(input_expression,
                                                input_meta,
                                                input_outcome_time,
@@ -57,25 +62,25 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
                                                plot_name="initial_survplot"
 ){
   
-  
+  #Check format of outcome to ensure that no samples have < 0 time until outcome, removing any that do
   if(sum(input_meta[,input_outcome_time] <= 0) > 0){
     print(paste0("Error with survival times of 0 or below. These samples will be removed"))
     temp_meta <- input_meta[input_meta[,input_outcome_time] > 0,]
   }else{
     temp_meta <- input_meta
   }
-  
+  #Check for expression data format and match to included metadata samples
   if(!is.data.frame(input_expression)){
     input_expression <- as.data.frame(input_expression)
   }
   temp_expression <- t(t(input_expression)[rownames(temp_meta),])
   
-  
+  #Convert expression to a matrix
   if(is.data.frame(temp_expression)){
     temp_expression <- as.matrix(temp_expression)
   }
   
-  ###Add GSVA scoring here for input expression data rather than meta with GSVA scores added
+  #Calculate GSVA scores for included genesets and expression data and add the scores to metadata
   cat(paste0("Running GSVA scoring on selected gene sets with included expression data.\n"))
   temp_gsva <- gsva(gsvaParam(temp_expression,input_gmts))
   temp_gsva <- t(temp_gsva)
@@ -83,14 +88,16 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   colnames(temp_gsva) <- paste0("GSVA_",colnames(temp_gsva))
   temp_meta <- cbind(temp_meta,temp_gsva)
   
-  ##Create survival formula for assessing all included GSVA scores in relation to overall survival
+  #Create survival formula for assessing all included GSVA scores in relation to overall survival
   temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                     paste(paste0("GSVA_",names(input_gmts)),collapse = " + ")))
   
+  #Define minimum split, bucket size, and complexity parameter set to use for survival cutpoint derivation with rpart
   temp_minsplit <- round(nrow(temp_meta)*initial_minsplit_fraction)
   temp_minbucket <- round(nrow(temp_meta)*initial_minbucket_fraction)
   temp_cp_set <- input_cp_set
   
+  #Initialize survival cutpoint variables
   flag_primary_cutpoint_sc_enrichment <- FALSE
   total_iterations <- 0
   temp_progFeature <- NULL
@@ -98,7 +105,9 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
   filtered_gsva_columns <- colnames(temp_meta)[grepl("GSVA_",colnames(temp_meta))]
   sub_gsva_columns <- filtered_gsva_columns
   cat(paste0("Running survival cutpoint analysis to identify the best prognostic feature and cutpoint with cell type association.\n"))
+  #Iterate through survival cutpoint variable options across included GSVA scores until a prognostic association is identified
   while(flag_primary_cutpoint_sc_enrichment == FALSE & total_iterations <= max_iterations){
+    #Alter provided minsplit and minbucket survival cutpoint variables on each iteration after the first until a prognostic score is found
     if(total_iterations > 0){
       sub_gsva_columns <- filtered_gsva_columns
       temp_minsplit <- round(nrow(temp_meta)*(initial_minsplit_fraction - minsplit_delta))
@@ -106,20 +115,24 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                         paste(sub_gsva_columns,collapse = " + ")))
     }
+    #Iterate through the complexity parameters provided in the input set until a prognostic score is found
     for(temp_cp_i in 1:length(temp_cp_set)){
       sub_gsva_columns <- filtered_gsva_columns
       temp_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ ",
                                         paste(sub_gsva_columns,collapse = " + ")))
       temp_cp <- temp_cp_set[temp_cp_i]
+      #Run rpart analysis using the current minsplit, minbucket, and cp parameter values, along with formula and metadata
       temp_fit <- rpart(temp_formula, data = temp_meta, method = "exp", 
                         control = rpart.control(cp=temp_cp,
                                                 maxdepth=1,
                                                 minsplit = temp_minsplit,
                                                 minbucket = temp_minbucket))
+      #Any GSVA scores that display importance from the corresponding rpart metric are screened for significance and scRNAseq cell type enrichment
       if(length(names(temp_fit$variable.importance)) > 0){
         for(temp_prog_feature_i in 1:min(max_prog_features_per_fit,length(names(temp_fit$variable.importance)))){
           temp_progFeature <- names(temp_fit$variable.importance)[temp_prog_feature_i]
           temp_progCutoff <- temp_fit$splits[temp_progFeature,"index"]
+          #Check each result for significance at p < 0.05 using a cox proportional hazards model
           cat(paste0("Testing cp ",temp_cp," minsplit ",temp_minsplit," and minbucket ",temp_minbucket," with prog feature ",temp_prog_feature_i," : ",temp_progFeature,"\n"))
           temp_meta$test_surv_group <- as.factor(temp_meta[,temp_progFeature] < temp_progCutoff)
           temp_surv_formula <- as.formula(paste0("Surv(",input_outcome_time,", ",input_outcome_result,") ~ test_surv_group"))
@@ -127,11 +140,15 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
           temp_summary <- summary(fit_cox)
           print(temp_summary)
           temp_coxph_pval <- as.numeric(temp_summary$waldtest["pvalue"])
+          #If a score is prognostic at the p < 0.05 significance level, it is checked for scRNAseq cell type enrichment
           if(temp_coxph_pval < 0.05){
             input_geneset_name <- str_replace(temp_progFeature,"GSVA_","")
+            #The prognostic score is checked for scRNAseq cell type enrichment
             comp_result <- check_sc_enrichment(input_sc_dataset,input_gmts,input_geneset_name)
+            #Module scores that show at least 2-fold enriched in a cell type vs each of the other cell types are returned
             if(sum(comp_result$max_module_score >= comp_result$other_module_scores*2) == length(comp_result$other_module_scores)){
               flag_primary_cutpoint_sc_enrichment <- TRUE
+              #A survival plot is made for the prognostic and cell type enriched score group
               temp_survFit <- eval(bquote(
                 survfit(.(as.formula(
                   paste0("Surv(", input_outcome_time, ", ", input_outcome_result, ") ~ test_surv_group")
@@ -148,33 +165,35 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
               pdf(paste0("E:/Projects/BioApp_1/Example_data/TCGA_PAAD/",plot_name,".pdf"))
               print(temp_best_surv_plot)
               dev.off()
+              #If a prognostic and cell type enriched score is identified, the max cell type is stored and the loop through scores is broken
               temp_max_cell_type <- comp_result$max_cell_type
               break
             }else{
-              ##Add code here to remove genesets that fail to show cellular enrichment from future iterations
+              #Genesets that fail to show cellular enrichment are removed since this will not change on future iterations
               filtered_gsva_columns <- filtered_gsva_columns[filtered_gsva_columns != temp_progFeature]
             }
           }
+          #Remove genesets that are not significant in this loop through scores
           sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
           total_iterations <- total_iterations + 1
         }
       }
+      #If a prognostic and cell type enriched score has been identified, break out of the loop through rpart variables
       if(flag_primary_cutpoint_sc_enrichment == TRUE){
         break
       }
-      sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
     }
-    sub_gsva_columns <- sub_gsva_columns[sub_gsva_columns != temp_progFeature]
   }
-  
+  #If a prognostic and cell type enriched GSVA score is identified, derive a cell type marker list from the scRNAseq
   if(flag_primary_cutpoint_sc_enrichment == TRUE){
     
     cat(paste0("Running single cell marker derivation to obtain a marker list between 500 and 1000 genes in size.\n"))
-    
+    #Initial variables are identified for cell type marker list derivation
     temp_thresholdFC <- 1.5
     temp_scMarker_size <- 0
     temp_scMarkers <- NULL
     enrichment_iterations <- 0
+    #Variables are iterated through until a marker list of suitable size (~500-1000 genes) is obtained, if possible
     while((temp_scMarker_size < 500 | temp_scMarker_size > 1000) & enrichment_iterations < max_enrichment_iterations){
       temp_scMarkers <- FindMarkers(
         object        = input_sc_dataset,
@@ -191,10 +210,12 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
       }
       enrichment_iterations <- enrichment_iterations + 1
     }
+    #Notify the user if a marker list of the optimal size cannot be obtained within the max iterations, and that the best obtained will be used.
     if(enrichment_iterations == max_enrichment_iterations){
       cat(paste0("Failed to identify sufficient numbers of enriched markers for the cell type associating with the identified prognostic feature.\n",
                  "The best obtained marker list will be returned despite being outside the optimal range of approximately 500-1000 genes.\n"))
     }
+    #Store the prognostic and cell type enriched score results, as well as the scRNAseq marker list for the enriched cell type, and return these results
     final_prog_info <- list(final_meta=temp_meta,
                             final_progFeature=temp_progFeature,
                             final_progCutoff=temp_progCutoff,
@@ -208,6 +229,7 @@ find_cellEnrichedPrognostic_scores <- function(input_expression,
                             final_scMarker_enrichment_threshold=temp_thresholdFC)
     return(final_prog_info)
   }else{
+    #If a prognostic and cell type enriched score for the provided arguments cannot be obtained, return this result.
     temp_message <- paste0("Failed to identify meaningful prognostic groups for a score showing cell type enrichment.\n")
     return(temp_message)
   }
